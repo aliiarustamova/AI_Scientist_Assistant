@@ -18,10 +18,17 @@ export type Citation = {
   title?: string;
   authors?: string[];
   year?: number;
+  venue?: string;            // Journal / preprint server / publication venue, e.g. "Nature Reviews Microbiology"
   snippet?: string;
-  relevance_score?: number;
+  relevance_score?: number;  // 0-1; UI may render as percentage ("71%")
+  description?: string;      // Neutral, factual paper description ("Reviews CRP-cAMP regulation..."). LLM-generated. Lit-review refs.
+  matched_on?: string[];     // Concept tags surfaced as chips ("E. coli", "Glucose", "Catabolite repression"). Lit-review refs.
+  importance?: string;       // "Why this matched" — LLM brief on relevance to the user's hypothesis. Lit-review refs.
 };
 
+// Scope is bioscience: 'cell_biology' | 'diagnostics' | 'gut_health' |
+// 'microbiology' | 'immunology' | 'neuroscience' | 'plant_science' | etc.
+// Out-of-scope domains (climate, materials, pure chemistry) not supported.
 export type Domain = string;
 
 export type StageName =

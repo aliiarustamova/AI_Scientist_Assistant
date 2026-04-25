@@ -6,6 +6,8 @@ From a scientific hypothesis to a runnable experiment plan.
 
 A natural-language hypothesis goes in. Out comes a literature novelty check plus an operationally grounded plan: protocol steps, materials with catalog numbers, a budget, a timeline, and a validation strategy. Built for the [Hack-Nation × Fulcrum Science](https://hack-nation.ai/) Challenge 04.
 
+> **Scope:** Bioscience only — biomedical and life-sciences experiments. Out-of-scope domains (climate, materials science, pure chemistry) are intentionally excluded so prompts, retrieval, and supplier coverage stay focused.
+
 ## How it works
 
 Eight stages share a single `ExperimentPlan` document (blackboard pattern). Each stage reads the fields it needs and writes its result back. The UI subscribes to the plan and renders sections as they land.

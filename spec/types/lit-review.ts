@@ -1,9 +1,14 @@
 import type { Citation, ISO8601 } from './shared';
 
+export type NoveltySignal =
+  | 'novel'
+  | 'similar_work_exists'
+  | 'exact_match_found';
+
 export type LitReviewOutput = {
-  signal: 'not_found' | 'similar_work_exists' | 'exact_match_found';
-  signal_explanation: string;
-  refs: Citation[];
+  signal: NoveltySignal;
+  description: string;            // 2-3 sentence explanation of the signal
+  references: Citation[];         // 1-3 most relevant; each carries description + importance + matched_on
   searched_at: ISO8601;
   tavily_query: string;
 };

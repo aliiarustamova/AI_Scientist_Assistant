@@ -1,0 +1,9 @@
+pydantic>=2.6
+python-dotenv>=1.0
+pyyaml>=6.0
+tavily-python>=0.3.7
+openai>=1.40
+anthropic>=0.34
+
+# Tests
+pytest>=8.0

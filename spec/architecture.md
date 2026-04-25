@@ -275,13 +275,18 @@ Every Tavily response is cached by SHA-256 of the canonicalized request body (so
 
 Cache misses fall through to live Tavily; hits return cached JSON unmodified.
 
-## Sample inputs (from challenge brief)
+## Scope
+
+**This product is limited to bioscience.** Biomedical and life-sciences experiments only — cell biology, molecular biology, diagnostics, microbiology / gut health, immunology, neuroscience, plant science, ecology, etc. Domains outside biology (climate, materials science, pure chemistry, energy) are explicitly out of scope. The challenge brief's fourth sample (Sporomusa CO₂ fixation) is a climate application and is excluded from our test set even though it uses a microbe.
+
+This scope shapes prompt design, retrieval sources (protocols.io is bioscience-heavy already), and the supplier list (Sigma / Thermo / Promega / Qiagen / IDT / ATCC / Addgene are all bioscience suppliers).
+
+## Sample inputs (in-scope subset of challenge brief)
 
 Test set for end-to-end runs:
 
 1. **Diagnostics** — paper-based electrochemical biosensor for CRP detection
 2. **Gut Health** — L. rhamnosus GG in C57BL/6 mice, FITC-dextran assay
 3. **Cell Biology** — trehalose vs DMSO cryopreservation of HeLa
-4. **Climate** — Sporomusa ovata bioelectrochemical CO₂ fixation
 
-Any plan output should handle all four.
+Any plan output should handle all three. The brief's fourth sample (Climate / Sporomusa) is excluded as out of scope.

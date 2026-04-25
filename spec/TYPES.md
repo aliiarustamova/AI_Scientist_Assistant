@@ -35,9 +35,9 @@ Architecture is a **blackboard**: one shared `ExperimentPlan` document, every st
 | **Reads (`ExperimentPlan` fields)** | `hypothesis` | `hypothesis` | `protocol` | `materials` | `protocol` | `hypothesis`, `protocol` | `hypothesis`, `lit_review`, `protocol`, `materials`, `budget`, `timeline`, `validation` | all 8 stage fields |
 | **Writes** | `lit_review` | `protocol` | `materials` | `budget` | `timeline` | `validation` | `critique` | `summary` |
 | **Field type** | `LitReviewSession` | `ProtocolGenerationOutput` | `MaterialsOutput` | `BudgetOutput` | `TimelineOutput` | `ValidationOutput` | `DesignCritique` | `SummaryOutput` |
-| **Core content** | `signal`, `refs[]`, `chat_history[]` | `steps[]`, `experiment_type` | `materials[]`, `by_category` | `line_items[]`, `total` | `phases[]`, `critical_path` | `success_criteria[]`, `controls[]`, `power_calculation` | `concerns[]`, `overall_soundness`, `strengths[]` | `tldr`, risk assessment |
+| **Core content** | `signal`, `references[]`, `chat_history[]` | `steps[]`, `experiment_type` | `materials[]`, `by_category` | `line_items[]`, `total` | `phases[]`, `critical_path` | `success_criteria[]`, `controls[]`, `power_calculation` | `concerns[]`, `overall_soundness`, `strengths[]` | `tldr`, risk assessment |
 | **External source** | Tavily | protocols.io `/steps` | protocols.io `/materials` + Tavily for gaps | Tavily supplier scrape + LLM fallback | Derived from steps | Derived from `protocol` | LLM reviewer-perspective audit | LLM synthesis |
-| **Citations** | `refs[].source` | `cited_protocols[]` | per-`Material.citation` | per-line `source` + `supplier_quotes[]` | (inherited) | (inherited) | `concerns[].cited_step` | `meta.feedback_session_ids` |
+| **Citations** | `references[].source` | `cited_protocols[]` | per-`Material.citation` | per-line `source` + `supplier_quotes[]` | (inherited) | (inherited) | `concerns[].cited_step` | `meta.feedback_session_ids` |
 | **Honesty fields** | `signal` itself | `assumptions[]` | `gaps[]` | `disclaimer`, `assumptions[]` | `assumptions[]` | `failure_modes[]` | `concerns[]` is the whole point | `risk_assessment[]` |
 | **User-facing UI** | Chat panel | Step-by-step view | Materials table | Cost breakdown | Gantt-style chart | Criteria + controls list | Reviewer-style critique panel | TL;DR header |
 | **Parallel-safe** | yes | yes | yes | yes | yes | yes | yes | no (last) |
@@ -94,7 +94,8 @@ classDiagram
 
     class LitReviewOutput {
         +signal: enum
-        +refs: Citation[]
+        +description: string
+        +references: Citation[]
         +tavily_query: string
     }
 
@@ -259,11 +260,15 @@ type Citation = {
   title?: string;
   authors?: string[];
   year?: number;
+  venue?: string;             // Journal / preprint server (e.g. "Nature Reviews Microbiology")
   snippet?: string;
-  relevance_score?: number;   // 0–1, primarily for lit-review refs
+  relevance_score?: number;   // 0–1; UI renders as percentage
+  description?: string;       // Neutral paper description (LLM-generated; lit-review refs)
+  matched_on?: string[];      // Concept-chip tags ("E. coli", "Glucose", ...)
+  importance?: string;        // "Why this matched" — relevance to the user's hypothesis (LLM-generated; lit-review refs)
 };
 
-type Domain = string;         // 'diagnostics' | 'gut_health' | 'cell_biology' | 'climate' | ...
+type Domain = string;         // bioscience only: 'cell_biology' | 'diagnostics' | 'gut_health' | 'microbiology' | 'immunology' | 'neuroscience' | ...
 
 type Hypothesis = {
   id: string;
@@ -302,23 +307,23 @@ type StageStatus =
 | `confidence` | yes | Trust level — drives UI badges |
 | `doi`, `url` | optional | Identifiers when the source has them |
 | `title`, `authors`, `year`, `snippet` | optional | Populated when citing a paper (Stage 1 refs) |
-| `relevance_score` | optional | Lit-review scoring; ignored for material citations |
+| `venue` | optional (lit-review) | Journal / preprint server — shown in metadata row of the card |
+| `relevance_score` | optional (lit-review) | 0–1 score; UI renders as a percentage bar |
+| `description` | optional (lit-review) | Neutral, factual description of what the paper covers (LLM-generated) |
+| `matched_on` | optional (lit-review) | Short concept tags rendered as chips on the card |
+| `importance` | optional (lit-review) | "Why this matched" — how the paper relates to the user's hypothesis (LLM-generated) |
 
 ---
 
 ## Stage 1 — Lit Review
 
-**What this stage does (plain English):** Before generating a plan, check whether this experiment has been done before. The user enters a hypothesis; the system searches the web (papers, preprints, prior protocols) via Tavily and returns a novelty signal — *not found*, *similar work exists*, or *exact match found* — plus 1–3 relevant references. The user can then chat back and forth ("what's different about this paper?", "how would my study extend it?") before deciding to proceed to plan generation. Conversation history is preserved for the rest of the session.
+**What this stage does (plain English):** Before generating a plan, check whether this experiment has been done before. The user enters a hypothesis; the system searches the web (papers, preprints, prior protocols) via Tavily and returns a novelty signal — *novel*, *similar work exists*, or *exact match found* — plus 1–3 relevant references with brief LLM summaries and source abstracts. The user can then chat back and forth ("what's different about this paper?", "how would my study extend it?") before deciding to proceed to plan generation. Conversation history is preserved for the rest of the session.
 
 ```typescript
-type LitReviewInput = {
-  hypothesis: Hypothesis;
-};
-
 type LitReviewOutput = {
-  signal: 'not_found' | 'similar_work_exists' | 'exact_match_found';
-  signal_explanation: string;             // 1–2 sentences
-  refs: Citation[];                       // 1–3 most relevant
+  signal: 'novel' | 'similar_work_exists' | 'exact_match_found';
+  description: string;                    // 2–3 sentences
+  references: Citation[];                 // 1–3 most relevant; each carries `description`, `importance`, `matched_on`
   searched_at: ISO8601;
   tavily_query: string;                   // exact query sent to Tavily
 };
@@ -326,7 +331,7 @@ type LitReviewOutput = {
 type LitReviewChatMessage = {
   role: 'user' | 'assistant';
   content: string;
-  cited_refs?: number[];                  // indices into LitReviewOutput.refs
+  cited_refs?: number[];                  // indices into LitReviewOutput.references
   timestamp: ISO8601;
 };
 
@@ -344,7 +349,7 @@ type LitReviewSession = {
 
 | Value | Meaning | UI affordance |
 |---|---|---|
-| `not_found` | No close prior work surfaced | Green badge — "novel territory" |
+| `novel` | No close prior work surfaced | Green badge — "novel territory" |
 | `similar_work_exists` | Related but not identical | Yellow badge — show the refs |
 | `exact_match_found` | This experiment appears done already | Red badge — strong "consider before proceeding" |
 

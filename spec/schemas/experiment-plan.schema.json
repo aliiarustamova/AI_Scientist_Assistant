@@ -89,8 +89,25 @@
         "title": { "type": "string" },
         "authors": { "type": "array", "items": { "type": "string" } },
         "year":  { "type": "integer" },
+        "venue": {
+          "type": "string",
+          "description": "Journal, preprint server, or other publication venue (e.g. 'Nature Reviews Microbiology')."
+        },
         "snippet": { "type": "string" },
-        "relevance_score": { "type": "number", "minimum": 0, "maximum": 1 }
+        "relevance_score": { "type": "number", "minimum": 0, "maximum": 1, "description": "0-1; UI may render as percentage." },
+        "description": {
+          "type": "string",
+          "description": "Neutral, factual paper description (lit-review refs)."
+        },
+        "matched_on": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Concept tags surfaced as chips (e.g. 'E. coli', 'Glucose'). Lit-review refs."
+        },
+        "importance": {
+          "type": "string",
+          "description": "'Why this matched' — LLM brief on relevance to the user's hypothesis (lit-review refs)."
+        }
       }
     },
 
@@ -155,12 +172,12 @@
 
     "LitReviewOutput": {
       "type": "object",
-      "required": ["signal", "signal_explanation", "refs", "searched_at", "tavily_query"],
+      "required": ["signal", "description", "references", "searched_at", "tavily_query"],
       "additionalProperties": false,
       "properties": {
-        "signal": { "type": "string", "enum": ["not_found", "similar_work_exists", "exact_match_found"] },
-        "signal_explanation": { "type": "string" },
-        "refs": { "type": "array", "items": { "$ref": "#/definitions/Citation" }, "maxItems": 3 },
+        "signal": { "type": "string", "enum": ["novel", "similar_work_exists", "exact_match_found"] },
+        "description": { "type": "string", "description": "2-3 sentence explanation of the novelty signal." },
+        "references": { "type": "array", "items": { "$ref": "#/definitions/Citation" }, "maxItems": 3 },
         "searched_at": { "$ref": "#/definitions/ISO8601" },
         "tavily_query": { "type": "string" }
       }
