@@ -6,5 +6,6 @@ export * from './budget';
 export * from './timeline';
 export * from './validation';
 export * from './summary';
+export * from './stage-contracts';
 export * from './feedback';
 export * from './storage';

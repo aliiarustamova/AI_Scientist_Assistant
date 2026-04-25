@@ -1,4 +1,4 @@
-import type { Hypothesis, ISO8601 } from './shared';
+import type { Hypothesis, ISO8601, StageName, StageStatus } from './shared';
 import type { LitReviewSession } from './lit-review';
 import type { ProtocolGenerationOutput } from './protocol';
 import type { MaterialsOutput } from './materials';
@@ -27,15 +27,28 @@ export type ExperimentPlanMeta = {
   feedback_session_ids?: string[];
 };
 
+// Shared blackboard. Every stage reads and writes fields here directly.
+// Stage outputs are optional — populated as stages complete; absent fields = not yet generated.
 export type ExperimentPlan = {
   id: string;
+
+  // Required input — populated at creation
   hypothesis: Hypothesis;
-  lit_review: LitReviewSession;
-  protocol: ProtocolGenerationOutput;
-  materials: MaterialsOutput;
-  budget: BudgetOutput;
-  timeline: TimelineOutput;
-  validation: ValidationOutput;
-  summary: SummaryOutput;
+
+  // Stage outputs — optional, populated by their respective stages
+  lit_review?: LitReviewSession;
+  protocol?: ProtocolGenerationOutput;
+  materials?: MaterialsOutput;
+  budget?: BudgetOutput;
+  timeline?: TimelineOutput;
+  validation?: ValidationOutput;
+  summary?: SummaryOutput;
+
+  // Per-stage lifecycle
+  status: Record<StageName, StageStatus>;
+
+  // Meta
+  created_at: ISO8601;
+  updated_at: ISO8601;
   meta: ExperimentPlanMeta;
 };

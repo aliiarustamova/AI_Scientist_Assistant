@@ -23,20 +23,24 @@ Data contracts for the AI Scientist Assistant pipeline. Source of truth for what
 
 ## Stages at a glance
 
-One-screen overview. Every stage column has the same six categories so you can scan across.
+Architecture is a **blackboard**: one shared `ExperimentPlan` document, every stage reads fields it depends on and writes its result back to a named field. No stage-to-stage handoffs.
 
 | | **1. Lit Review** | **2. Protocol** | **3. Materials** | **4. Budget** | **5. Timeline** | **6. Validation** | **7. Summary** |
 |---|---|---|---|---|---|---|---|
-| **Input** | `Hypothesis` | `Hypothesis` + cached protocols | Stage 2 out | Stage 3 out | Stage 2 out | Stage 2 out + `Hypothesis` | All above |
-| **Output type** | `LitReviewSession` | `ProtocolGenerationOutput` | `MaterialsOutput` | `BudgetOutput` | `TimelineOutput` | `ValidationOutput` | `ExperimentPlan` |
-| **Core content** | `signal`, `refs[]`, `chat_history[]` | `steps[]`, `experiment_type` | `materials[]`, `by_category` | `line_items[]`, `total` | `phases[]`, `critical_path` | `success_criteria[]`, `controls[]` | `tldr`, full plan |
-| **External source** | Tavily | protocols.io `/steps` | protocols.io `/materials` + Tavily for gaps | Tavily supplier scrape + LLM fallback | Derived from steps | Derived from S2 | LLM synthesis |
+| **Reads (`ExperimentPlan` fields)** | `hypothesis` | `hypothesis` | `protocol` | `materials` | `protocol` | `hypothesis`, `protocol` | all 7 stage fields |
+| **Writes** | `lit_review` | `protocol` | `materials` | `budget` | `timeline` | `validation` | `summary` |
+| **Field type** | `LitReviewSession` | `ProtocolGenerationOutput` | `MaterialsOutput` | `BudgetOutput` | `TimelineOutput` | `ValidationOutput` | `SummaryOutput` |
+| **Core content** | `signal`, `refs[]`, `chat_history[]` | `steps[]`, `experiment_type` | `materials[]`, `by_category` | `line_items[]`, `total` | `phases[]`, `critical_path` | `success_criteria[]`, `controls[]` | `tldr`, risk assessment |
+| **External source** | Tavily | protocols.io `/steps` | protocols.io `/materials` + Tavily for gaps | Tavily supplier scrape + LLM fallback | Derived from steps | Derived from `protocol` | LLM synthesis |
 | **Citations** | `refs[].source` | `cited_protocols[]` | per-`Material.citation` | per-line `source` + `supplier_quotes[]` | (inherited) | (inherited) | `meta.feedback_session_ids` |
 | **Honesty fields** | `signal` itself | `assumptions[]` | `gaps[]` | `disclaimer`, `assumptions[]` | `assumptions[]` | `failure_modes[]` | `risk_assessment[]` |
 | **User-facing UI** | Chat panel | Step-by-step view | Materials table | Cost breakdown | Gantt-style chart | Criteria + controls list | TL;DR header |
+| **Parallel-safe** | yes | yes | yes | yes | yes | yes | no (last) |
 | **Feedback target** | — | yes (stretch) | yes (stretch) | yes (stretch) | yes (stretch) | yes (stretch) | — |
 
-Pipeline ordering: Stages 3, 5, 6 run in parallel after 2. Stage 4 depends on 3. Stage 7 waits for everything.
+**Scheduling:** Stages 1 and 2 unlock immediately (only need `hypothesis`). Stages 3, 5, 6 unlock when 2 completes. Stage 4 unlocks when 3 completes. Stage 7 waits for everything.
+
+**Per-stage status** is tracked on `ExperimentPlan.status[stage_name]` as a `StageStatus` discriminated union (`not_started` / `running` / `complete` / `failed`).
 
 ---
 
@@ -50,6 +54,15 @@ classDiagram
 
     class ExperimentPlan {
         +id: string
+        +hypothesis: Hypothesis
+        +lit_review?: LitReviewSession
+        +protocol?: ProtocolGenerationOutput
+        +materials?: MaterialsOutput
+        +budget?: BudgetOutput
+        +timeline?: TimelineOutput
+        +validation?: ValidationOutput
+        +summary?: SummaryOutput
+        +status: Record~StageName, StageStatus~
         +meta: ExperimentPlanMeta
     }
 
@@ -147,13 +160,13 @@ classDiagram
     }
 
     ExperimentPlan *-- Hypothesis
-    ExperimentPlan *-- LitReviewSession
-    ExperimentPlan *-- ProtocolGenerationOutput
-    ExperimentPlan *-- MaterialsOutput
-    ExperimentPlan *-- BudgetOutput
-    ExperimentPlan *-- TimelineOutput
-    ExperimentPlan *-- ValidationOutput
-    ExperimentPlan *-- SummaryOutput
+    ExperimentPlan o-- LitReviewSession : optional
+    ExperimentPlan o-- ProtocolGenerationOutput : optional
+    ExperimentPlan o-- MaterialsOutput : optional
+    ExperimentPlan o-- BudgetOutput : optional
+    ExperimentPlan o-- TimelineOutput : optional
+    ExperimentPlan o-- ValidationOutput : optional
+    ExperimentPlan o-- SummaryOutput : optional
 
     LitReviewSession *-- LitReviewOutput
     ProtocolGenerationOutput *-- ProtocolStep
@@ -189,10 +202,13 @@ Stages 3, 5, 6 run in parallel after 2. Stage 4 depends on 3. Stage 7 waits for 
 
 ## Conventions
 
-- **All outputs are JSON-serializable.** No `Date` objects, no `Map`, no functions. Survives Supabase storage and LLM round-trips.
+- **Blackboard, not pipeline.** Stages don't accept inputs and return outputs. They read fields from a shared `ExperimentPlan` and write to a named field. Stage runners take `(plan: ExperimentPlan) => Promise<Partial<ExperimentPlan>>` — the partial is merged back into the plan.
+- **Stage-output fields are optional on `ExperimentPlan`.** A plan with `protocol` populated but `budget` missing is a perfectly valid in-flight state. The UI renders whatever's there.
+- **`status` is the source of truth for lifecycle.** Don't infer "is materials done?" from whether `materials` is populated — check `status.materials.state === 'complete'`. Lets a stage write a partial result and still be marked `running`.
+- **All outputs are JSON-serializable.** No `Date` objects, no `Map`, no functions. Survives Supabase JSONB storage and LLM round-trips.
 - **Citations are first-class.** Every step, material, and budget line carries a `Citation`. Lets the UI show "from DOI X" tooltips.
-- **`experiment_type` is the feedback bucketing key.** Set once in Stage 2, inherited by all downstream stages. Few-shot retrieval keys off it.
-- **Honesty over hallucination.** Every stage output has `gaps` / `assumptions` / `failure_modes` fields where applicable.
+- **`experiment_type` is the feedback bucketing key.** Written by Stage 2 to `protocol.experiment_type`, read by every downstream stage and the feedback retriever.
+- **Honesty over hallucination.** Every stage's field has `gaps` / `assumptions` / `failure_modes` where applicable.
 - **Open-ended taxonomies are strings.** `Domain`, `MaterialCategory`, `Citation.source`, currency codes — not union literals. Lets new categories appear without schema migrations.
 - **Datetimes are ISO 8601 strings** (`"2026-04-25T14:30:00Z"`). Durations are ISO 8601 duration strings (`"PT2H30M"`, `"P3D"`).
 
@@ -242,6 +258,23 @@ type Hypothesis = {
   control_implied?: string;
   created_at: ISO8601;
 };
+
+// Names of the seven stages — used as keys on ExperimentPlan.status and in StageContract.
+type StageName =
+  | 'lit_review'
+  | 'protocol'
+  | 'materials'
+  | 'budget'
+  | 'timeline'
+  | 'validation'
+  | 'summary';
+
+// Lifecycle of a single stage. Discriminated union so UI/orchestrator can branch on `state`.
+type StageStatus =
+  | { state: 'not_started' }
+  | { state: 'running'; started_at: ISO8601 }
+  | { state: 'complete'; completed_at: ISO8601 }
+  | { state: 'failed'; failed_at: ISO8601; error: string };
 ```
 
 ### `Citation` — field guide
@@ -512,7 +545,9 @@ type ValidationOutput = {
 
 ## Stage 7 — Summary & Final Plan
 
-Top-level container; what gets stored and what the UI consumes for the final view.
+`ExperimentPlan` is the **shared blackboard document**. It's created when the user submits a hypothesis (only `hypothesis`, `id`, `status`, and `meta` populated). Stages then write their named fields. The UI subscribes to it and renders whatever fields are present.
+
+Stage 7's job is to write the `summary` field — the TL;DR, key decisions, and risk assessment — once all other fields are populated.
 
 ```typescript
 type RiskAssessment = {
@@ -536,21 +571,76 @@ type ExperimentPlanMeta = {
   feedback_session_ids?: string[];
 };
 
+// Shared blackboard. All stage fields optional — populated as stages complete.
 type ExperimentPlan = {
   id: string;
+
+  // Required input — populated at creation
   hypothesis: Hypothesis;
-  lit_review: LitReviewSession;
-  protocol: ProtocolGenerationOutput;
-  materials: MaterialsOutput;
-  budget: BudgetOutput;
-  timeline: TimelineOutput;
-  validation: ValidationOutput;
-  summary: SummaryOutput;
+
+  // Stage outputs — optional, written by their respective stages
+  lit_review?: LitReviewSession;
+  protocol?: ProtocolGenerationOutput;
+  materials?: MaterialsOutput;
+  budget?: BudgetOutput;
+  timeline?: TimelineOutput;
+  validation?: ValidationOutput;
+  summary?: SummaryOutput;
+
+  // Per-stage lifecycle — source of truth for "is stage X done?"
+  status: Record<StageName, StageStatus>;
+
+  // Meta
+  created_at: ISO8601;
+  updated_at: ISO8601;
   meta: ExperimentPlanMeta;
 };
 ```
 
-### Example shape (truncated)
+### Stage contracts
+
+Stages declare their data dependencies in `spec/types/stage-contracts.ts`. The orchestrator walks `ExperimentPlan`, finds stages whose `reads` are populated, and runs them. No inter-stage handoffs.
+
+```typescript
+type PlanField =
+  | 'hypothesis'
+  | 'lit_review'
+  | 'protocol'
+  | 'materials'
+  | 'budget'
+  | 'timeline'
+  | 'validation'
+  | 'summary';
+
+type StageContract = {
+  stage: StageName;
+  reads: PlanField[];
+  writes: PlanField[];
+  parallel_safe: boolean;
+};
+
+const STAGE_CONTRACTS: Record<StageName, StageContract> = {
+  lit_review: { stage: 'lit_review', reads: ['hypothesis'], writes: ['lit_review'], parallel_safe: true },
+  protocol:   { stage: 'protocol',   reads: ['hypothesis'], writes: ['protocol'],   parallel_safe: true },
+  materials:  { stage: 'materials',  reads: ['protocol'],   writes: ['materials'],  parallel_safe: true },
+  timeline:   { stage: 'timeline',   reads: ['protocol'],   writes: ['timeline'],   parallel_safe: true },
+  validation: { stage: 'validation', reads: ['hypothesis', 'protocol'], writes: ['validation'], parallel_safe: true },
+  budget:     { stage: 'budget',     reads: ['materials'],  writes: ['budget'],     parallel_safe: true },
+  summary:    { stage: 'summary',    reads: ['hypothesis', 'lit_review', 'protocol', 'materials', 'budget', 'timeline', 'validation'], writes: ['summary'], parallel_safe: false },
+};
+```
+
+A stage runner has the signature:
+
+```typescript
+type StageRunner = (plan: ExperimentPlan) => Promise<Partial<ExperimentPlan>>;
+```
+
+It returns a partial plan that the orchestrator merges back. This keeps stages pure — no side-effects on the plan beyond what they return.
+
+### Example shape (mid-flight, truncated)
+
+A plan partway through generation — Stages 1, 2, 3, 5, 6 complete; Stage 4 (Budget) running; Stage 7 (Summary) not started. UI renders sections that are populated, shows "generating…" for the rest.
 
 ```json
 {
@@ -563,6 +653,15 @@ type ExperimentPlan = {
     "measurable_outcome": "≥15pp post-thaw viability gain",
     "control_implied": "DMSO standard protocol",
     "created_at": "2026-04-25T14:30:00Z"
+  },
+  "status": {
+    "lit_review": { "state": "complete", "completed_at": "2026-04-25T14:30:18Z" },
+    "protocol":   { "state": "complete", "completed_at": "2026-04-25T14:30:42Z" },
+    "materials":  { "state": "complete", "completed_at": "2026-04-25T14:31:05Z" },
+    "timeline":   { "state": "complete", "completed_at": "2026-04-25T14:30:58Z" },
+    "validation": { "state": "complete", "completed_at": "2026-04-25T14:31:01Z" },
+    "budget":     { "state": "running",  "started_at":   "2026-04-25T14:31:06Z" },
+    "summary":    { "state": "not_started" }
   },
   "protocol": {
     "experiment_type": "cryopreservation",
@@ -609,6 +708,8 @@ type ExperimentPlan = {
   }
 }
 ```
+
+`summary` and `budget` keys are absent from this example because their stages haven't completed. The UI renders sections whose fields are present.
 
 ---
 
@@ -693,14 +794,15 @@ spec/
 ├── TYPES.md                  ← this file
 └── types/
     ├── index.ts              ← re-exports everything
-    ├── shared.ts             ← ISO8601, DOI, Money, Duration, Citation, Hypothesis
-    ├── lit-review.ts         ← Stage 1
-    ├── protocol.ts           ← Stage 2
-    ├── materials.ts          ← Stage 3
-    ├── budget.ts             ← Stage 4
-    ├── timeline.ts           ← Stage 5
-    ├── validation.ts         ← Stage 6
-    ├── summary.ts            ← Stage 7 + ExperimentPlan
+    ├── shared.ts             ← ISO8601, DOI, Money, Duration, Citation, Hypothesis, StageName, StageStatus
+    ├── lit-review.ts         ← Stage 1 field type
+    ├── protocol.ts           ← Stage 2 field type
+    ├── materials.ts          ← Stage 3 field type
+    ├── budget.ts             ← Stage 4 field type + SupplierQuote
+    ├── timeline.ts           ← Stage 5 field type
+    ├── validation.ts         ← Stage 6 field type
+    ├── summary.ts            ← Stage 7 field type + ExperimentPlan blackboard
+    ├── stage-contracts.ts    ← STAGE_CONTRACTS reads/writes table for the orchestrator
     ├── feedback.ts           ← Stretch goal
     └── storage.ts            ← Supabase row shapes
 ```

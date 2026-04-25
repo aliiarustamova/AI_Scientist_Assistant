@@ -16,9 +16,15 @@
 | Supplier sources | Thermo Fisher, Sigma-Aldrich, Promega, Qiagen, IDT, ATCC, Addgene | Crawled via Tavily for catalog #s + pricing |
 | Embeddings | OpenAI `text-embedding-3-small` or local | Cheap or free |
 
-## Pipeline
+## Pipeline (blackboard pattern)
 
-7 stages. Stage 1 is conversational (user-facing chat). Stages 2–7 are the plan generation pipeline; 3/5/6 run in parallel after 2; 4 waits for 3; 7 waits for everything.
+7 stages, all reading from and writing to one shared `ExperimentPlan` document stored in Supabase. No stage-to-stage handoffs — every stage's data dependency is on fields of the shared plan. The orchestrator schedules a stage when its `reads` are populated and the stage isn't already running or complete.
+
+This makes the system:
+- **Resumable** — failed stages don't block independent stages
+- **Observable** — full plan state is one inspectable JSON document at any point
+- **Extensible** — adding a stage means declaring its `reads`/`writes`, no plumbing
+- **Naturally progressive** — UI watches the plan; populated fields render, missing fields show "generating…"
 
 ```mermaid
 flowchart TB
@@ -26,104 +32,113 @@ flowchart TB
 
     subgraph UI["React UI on Vercel"]
         Input["Hypothesis Input"]
-        LitView["Stage 1 View:<br/>Lit QC Chat"]
-        PlanView["Plan View<br/>(stages render progressively)"]
+        LitView["Lit QC Chat View"]
+        PlanView["Plan View<br/>(watches plan, renders<br/>populated fields)"]
     end
 
+    Plan[("ExperimentPlan<br/>shared state in Supabase<br/>(JSONB)")]
+    Cache[("Supabase Postgres<br/>+ pgvector<br/>protocol + quote cache")]
     Tavily[("Tavily<br/>web search + extract")]
+    PIO[("protocols.io API")]
 
     subgraph S1["Stage 1: Lit Review"]
-        LitSearch["Tavily query:<br/>novelty check"]
-        LLM1["Gemini 2.5 Flash"]
+        S1Op["queries Tavily +<br/>Gemini Flash"]
     end
 
-    Cache[("Supabase Postgres<br/>+ pgvector<br/>protocol + quote cache")]
-
-    subgraph S2["Stage 2: Protocol Generation"]
-        ProtoSearch["protocols.io search<br/>+ retrieve top-K"]
-        Methodology["LLM: synthesize<br/>step-by-step protocol"]
+    subgraph S2["Stage 2: Protocol"]
+        S2Op["queries protocols.io,<br/>caches, embeds, +<br/>Gemini Flash synthesis"]
     end
 
-    subgraph S3["Stage 3: Materials & Supply Chain"]
-        MatFetch["protocols.io materials endpoint"]
-        MatGapFill["Tavily query:<br/>resolve catalog # gaps<br/>(Thermo/Sigma/Addgene/etc)"]
-        MatNorm["LLM: normalize<br/>+ dedupe + select vendor"]
+    subgraph S3["Stage 3: Materials"]
+        S3Op["protocols.io materials +<br/>Tavily gap-fill +<br/>Gemini Flash normalize"]
     end
 
     subgraph S4["Stage 4: Budget"]
-        SupplierLookup["Tavily query per material:<br/>pull product page price"]
-        BudgetLLM["LLM: assemble line items<br/>+ estimate gaps"]
+        S4Op["Tavily supplier scrape +<br/>Gemini Flash assembly"]
     end
 
     subgraph S5["Stage 5: Timeline"]
-        TimelineLLM["LLM: phase steps<br/>+ resolve dependencies"]
+        S5Op["Gemini Flash:<br/>phases + dependencies"]
     end
 
     subgraph S6["Stage 6: Validation"]
-        ValLLM["LLM: extract criteria<br/>+ measurement methods"]
+        S6Op["Gemini Flash:<br/>criteria + controls"]
     end
 
     subgraph S7["Stage 7: Summary"]
-        SumLLM["LLM: TL;DR<br/>+ final assembly"]
+        S7Op["Gemini Flash:<br/>TL;DR + risk assessment"]
     end
 
-    subgraph Feedback["Stretch: Feedback Loop"]
-        FB[("Supabase feedback table<br/>tagged by experiment type")]
-    end
+    FB[("Supabase feedback<br/>(stretch)")]
 
     User --> Input
-    Input -->|hypothesis| LitSearch
-    LitSearch --> Tavily
-    Tavily --> LLM1
-    LLM1 --> LitView
-    LitView <-.->|follow-up Q's| LLM1
-    LitView -->|"user clicks<br/>Generate Plan"| ProtoSearch
+    Input -->|create| Plan
 
-    ProtoSearch <--> Cache
-    Cache --> Methodology
-    Methodology --> S3
-    Methodology --> S5
-    Methodology --> S6
+    Plan -->|reads hypothesis| S1
+    S1Op <--> Tavily
+    S1 -->|writes lit_review| Plan
 
-    MatFetch <--> Cache
-    MatFetch --> MatGapFill
-    MatGapFill --> Tavily
-    Tavily --> MatNorm
-    MatNorm --> S4
-    MatNorm --> SupplierLookup
-    SupplierLookup --> Tavily
-    Tavily --> BudgetLLM
-    SupplierLookup <--> Cache
+    Plan -->|reads hypothesis| S2
+    S2Op <--> PIO
+    S2Op <--> Cache
+    S2 -->|writes protocol| Plan
 
-    Methodology --> S7
-    MatNorm --> S7
-    BudgetLLM --> S7
-    TimelineLLM --> S7
-    ValLLM --> S7
+    Plan -->|reads protocol| S3
+    S3Op <--> PIO
+    S3Op <--> Tavily
+    S3Op <--> Cache
+    S3 -->|writes materials| Plan
 
-    S7 --> PlanView
+    Plan -->|reads protocol| S5
+    S5 -->|writes timeline| Plan
+
+    Plan -->|reads hypothesis,<br/>protocol| S6
+    S6 -->|writes validation| Plan
+
+    Plan -->|reads materials| S4
+    S4Op <--> Tavily
+    S4Op <--> Cache
+    S4 -->|writes budget| Plan
+
+    Plan -->|reads all| S7
+    S7 -->|writes summary| Plan
+
+    Plan --> PlanView
+    LitView <-->|chat follow-ups| S1Op
 
     PlanView -.->|stage-tagged corrections| FB
-    FB -.->|few-shot| S2
-    FB -.->|few-shot| S3
-    FB -.->|few-shot| S4
-    FB -.->|few-shot| S5
-    FB -.->|few-shot| S6
+    FB -.->|few-shot in next plan| Plan
 ```
 
-## Stage contracts
+### Stage contracts (declarative orchestration)
 
-Full TypeScript interfaces in `spec/types/`. Summary:
+`spec/types/stage-contracts.ts` defines `STAGE_CONTRACTS` — the runtime read/write declarations the orchestrator uses. Summary:
 
-| Stage | Input | Output | Source |
+| Stage | Reads | Writes | Parallel-safe |
 |---|---|---|---|
-| 1. Lit Review | `Hypothesis` | `LitReviewSession` (conversational) | Tavily |
-| 2. Protocol | `Hypothesis` + cached protocols | `ProtocolGenerationOutput` | protocols.io steps |
-| 3. Materials | Stage 2 output | `MaterialsOutput` | protocols.io materials + Tavily for gaps |
-| 4. Budget | Stage 3 output | `BudgetOutput` | Tavily supplier-page scrape + LLM estimate fallback |
-| 5. Timeline | Stage 2 output | `TimelineOutput` | derived from steps |
-| 6. Validation | Stage 2 output + hypothesis | `ValidationOutput` | protocol "expected results" |
-| 7. Summary | All above | `ExperimentPlan` | LLM final pass |
+| 1. Lit Review | `hypothesis` | `lit_review` | yes |
+| 2. Protocol | `hypothesis` | `protocol` | yes |
+| 3. Materials | `protocol` | `materials` | yes |
+| 5. Timeline | `protocol` | `timeline` | yes |
+| 6. Validation | `hypothesis`, `protocol` | `validation` | yes |
+| 4. Budget | `materials` | `budget` | yes |
+| 7. Summary | all 7 stage fields | `summary` | no (last) |
+
+Stages 1 and 2 can start immediately. 3, 5, 6 unlock when 2 completes. 4 unlocks when 3 completes. 7 waits for everything.
+
+## Stage data shapes
+
+Full TypeScript interfaces in `spec/types/`. Each stage writes its named field on `ExperimentPlan`:
+
+| Plan field | Type | Written by | External source |
+|---|---|---|---|
+| `lit_review` | `LitReviewSession` (conversational) | Stage 1 | Tavily |
+| `protocol` | `ProtocolGenerationOutput` | Stage 2 | protocols.io steps |
+| `materials` | `MaterialsOutput` | Stage 3 | protocols.io materials + Tavily for gaps |
+| `budget` | `BudgetOutput` | Stage 4 | Tavily supplier-page scrape + LLM estimate fallback |
+| `timeline` | `TimelineOutput` | Stage 5 | derived from steps |
+| `validation` | `ValidationOutput` | Stage 6 | protocol "expected results" |
+| `summary` | `SummaryOutput` | Stage 7 | LLM final pass over all other fields |
 
 ### Supplier domains (queried via Tavily in Stages 3 & 4)
 
@@ -139,12 +154,13 @@ Full TypeScript interfaces in `spec/types/`. Summary:
 
 ## Design principles
 
+- **Blackboard, not pipeline.** Stages don't pass data to each other; they read and write fields on a shared `ExperimentPlan`. Adding a stage = declaring `reads`/`writes`. Re-running a stage = overwriting its field.
 - **Citations are first-class.** Every step, material, supplier quote, and budget line carries a `Citation` or `SupplierQuote` with source URL. Demo signal: tooltip "from DOI X" or "from Sigma product page (scraped 2026-04-25)."
-- **`experiment_type` is the feedback bucketing key.** Set once in Stage 2; inherited by all stages. Few-shot retrieval keys off it.
+- **`experiment_type` is the feedback bucketing key.** Set once when Stage 2 writes `protocol.experiment_type`; inherited downstream. Few-shot retrieval keys off it.
 - **Honest gaps over hallucination.** Every stage output has `gaps` / `assumptions` / `failure_modes` fields — explicitly surface what the system couldn't resolve. A budget line marked `source: 'llm_estimate'` is honest; a fabricated SKU is not.
 - **Tavily caches into Supabase aggressively.** Every supplier quote and Tavily extraction is cached by URL. Re-running a similar plan reuses prior quotes within a TTL (e.g., 7 days).
-- **Each stage is independently testable.** Mock upstream output, run any stage in isolation. Important for parallel hackathon work.
-- **Progressive UI rendering.** Stages stream to the UI as they complete; user sees plan assemble in real time, not a 30s loading spinner.
+- **Each stage is independently testable.** Mock the plan with the stage's `reads` populated, run that stage in isolation. Important for parallel hackathon work.
+- **Progressive UI rendering.** UI subscribes to the plan document. Each populated field renders its section; missing fields show "generating…". No coordinated loading state.
 
 ## Tavily call budget per plan
 

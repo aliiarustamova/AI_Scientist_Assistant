@@ -24,6 +24,21 @@ export type Citation = {
 
 export type Domain = string;
 
+export type StageName =
+  | 'lit_review'
+  | 'protocol'
+  | 'materials'
+  | 'budget'
+  | 'timeline'
+  | 'validation'
+  | 'summary';
+
+export type StageStatus =
+  | { state: 'not_started' }
+  | { state: 'running'; started_at: ISO8601 }
+  | { state: 'complete'; completed_at: ISO8601 }
+  | { state: 'failed'; failed_at: ISO8601; error: string };
+
 export type Hypothesis = {
   id: string;
   text: string;
