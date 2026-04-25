@@ -519,7 +519,7 @@ type TimelineOutput = {
 
 ## Stage 6 — Validation
 
-Success criteria, controls, and failure modes drawn from the methodology + hypothesis.
+**What this stage does (plain English):** Defines what success looks like and how to measure it. Specifies (1) success criteria with measurable thresholds, (2) controls — positive, negative, vehicle, sham — to rule out confounders, (3) failure modes with proposed mitigations, and (4) a power calculation justifying the chosen sample size. Ends with a single-sentence go/no-go threshold telling the scientist when to abandon.
 
 ```typescript
 type SuccessCriterion = {
@@ -543,14 +543,34 @@ type Control = {
   purpose: string;
 };
 
+type EffectSize = {
+  value: number;
+  type: string;                           // 'cohens_d' | 'percent_change' | 'fold_change' | 'odds_ratio' | ...
+};
+
+type PowerCalculation = {
+  statistical_test: string;               // e.g. "two-tailed Student's t-test"
+  alpha: number;                          // typically 0.05
+  power: number;                          // typically 0.80
+  effect_size: EffectSize;
+  n_per_group: number;
+  groups: number;
+  total_n: number;
+  assumptions: string[];                  // e.g. "normally distributed", "equal variance"
+  rationale: string;                      // why this effect size was chosen
+};
+
 type ValidationOutput = {
   success_criteria: SuccessCriterion[];
   controls: Control[];
   failure_modes: FailureMode[];
+  power_calculation: PowerCalculation;
   expected_outcome_summary: string;
   go_no_go_threshold: string;             // single sentence: when to abandon
 };
 ```
+
+The `power_calculation` justifies the `n` cited in any `SuccessCriterion.threshold`. Statistical thresholds without a power calc are common in the literature but a real reviewer will ask.
 
 ---
 
