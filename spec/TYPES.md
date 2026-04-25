@@ -871,6 +871,8 @@ type ProtocolChunkRow = {
 spec/
 ├── architecture.md           ← high-level architecture + Mermaid diagram
 ├── TYPES.md                  ← this file
+├── schemas/
+│   └── experiment-plan.schema.json   ← JSON Schema (draft-07) for the full ExperimentPlan
 └── types/
     ├── index.ts              ← re-exports everything
     ├── shared.ts             ← ISO8601, DOI, Money, Duration, Citation, Hypothesis, StageName, StageStatus
@@ -886,6 +888,25 @@ spec/
     ├── feedback.ts           ← Stretch goal
     └── storage.ts            ← Supabase row shapes
 ```
+
+## JSON Schema
+
+For consumers outside TypeScript (Python validators, OpenAPI tooling, other-language teams), there's a draft-07 JSON Schema mirroring the TypeScript types:
+
+[`spec/schemas/experiment-plan.schema.json`](schemas/experiment-plan.schema.json)
+
+Use it with any standard validator (Ajv, jsonschema, etc.):
+
+```python
+import json, jsonschema
+
+with open('spec/schemas/experiment-plan.schema.json') as f:
+    schema = json.load(f)
+
+jsonschema.validate(instance=plan_dict, schema=schema)
+```
+
+The schema is hand-maintained alongside the TypeScript types. If you change a TS type, update the schema in the same commit.
 
 ---
 
