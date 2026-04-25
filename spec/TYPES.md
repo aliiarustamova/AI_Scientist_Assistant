@@ -32,7 +32,7 @@ Architecture is a **blackboard**: one shared `ExperimentPlan` document, every st
 
 | | **1. Lit Review** | **2. Protocol** | **3. Materials** | **4. Budget** | **5. Timeline** | **6. Validation** | **7. Critique** | **8. Summary** |
 |---|---|---|---|---|---|---|---|---|
-| **Reads (`ExperimentPlan` fields)** | `hypothesis` | `hypothesis` | `protocol` | `materials` | `protocol` | `hypothesis`, `protocol` | `hypothesis`, `protocol`, `materials`, `budget`, `timeline`, `validation` | all 8 stage fields |
+| **Reads (`ExperimentPlan` fields)** | `hypothesis` | `hypothesis` | `protocol` | `materials` | `protocol` | `hypothesis`, `protocol` | `hypothesis`, `lit_review`, `protocol`, `materials`, `budget`, `timeline`, `validation` | all 8 stage fields |
 | **Writes** | `lit_review` | `protocol` | `materials` | `budget` | `timeline` | `validation` | `critique` | `summary` |
 | **Field type** | `LitReviewSession` | `ProtocolGenerationOutput` | `MaterialsOutput` | `BudgetOutput` | `TimelineOutput` | `ValidationOutput` | `DesignCritique` | `SummaryOutput` |
 | **Core content** | `signal`, `refs[]`, `chat_history[]` | `steps[]`, `experiment_type` | `materials[]`, `by_category` | `line_items[]`, `total` | `phases[]`, `critical_path` | `success_criteria[]`, `controls[]`, `power_calculation` | `concerns[]`, `overall_soundness`, `strengths[]` | `tldr`, risk assessment |
@@ -43,7 +43,7 @@ Architecture is a **blackboard**: one shared `ExperimentPlan` document, every st
 | **Parallel-safe** | yes | yes | yes | yes | yes | yes | yes | no (last) |
 | **Feedback target** | — | yes (stretch) | yes (stretch) | yes (stretch) | yes (stretch) | yes (stretch) | yes (stretch) | — |
 
-**Scheduling:** Stages 1 and 2 unlock immediately (only need `hypothesis`). Stages 3, 5, 6 unlock when 2 completes. Stage 4 unlocks when 3 completes. Stage 7 (Critique) unlocks when 3, 4, 5, 6 are complete. Stage 8 (Summary) waits for everything including critique.
+**Scheduling:** Stages 1 and 2 unlock immediately (only need `hypothesis`). Stages 3, 5, 6 unlock when 2 completes. Stage 4 unlocks when 3 completes. Stage 7 (Critique) unlocks when 1, 3, 4, 5, 6 are all complete (Stage 1's lit_review is a read dependency so the critique can evaluate novelty claims). Stage 8 (Summary) waits for everything including critique.
 
 **Per-stage status** is tracked on `ExperimentPlan.status[stage_name]` as a `StageStatus` discriminated union (`not_started` / `running` / `complete` / `failed`).
 
@@ -209,7 +209,7 @@ Where each type is produced and consumed across the pipeline.
 | 4. Budget | `materials` | `budget` : `BudgetOutput` | Tavily supplier-page scrape (Thermo / Sigma / Promega / Qiagen / IDT / ATCC / Addgene); LLM estimate as fallback |
 | 5. Timeline | `protocol` | `timeline` : `TimelineOutput` | Derived from steps |
 | 6. Validation | `hypothesis`, `protocol` | `validation` : `ValidationOutput` | Protocol "expected results" |
-| 7. Design Critique | `hypothesis`, `protocol`, `materials`, `budget`, `timeline`, `validation` | `critique` : `DesignCritique` | LLM reviewer-perspective audit |
+| 7. Design Critique | `hypothesis`, `lit_review`, `protocol`, `materials`, `budget`, `timeline`, `validation` | `critique` : `DesignCritique` | LLM reviewer-perspective audit |
 | 8. Summary | all above incl. `critique` | `summary` : `SummaryOutput` | LLM final pass |
 
 Stages 3, 5, 6 run in parallel after 2. Stage 4 depends on 3. Stage 7 waits for everything.
@@ -591,7 +591,7 @@ The `power_calculation` justifies the `n` cited in any `SuccessCriterion.thresho
 
 ## Stage 7 — Design Critique
 
-**What this stage does (plain English):** Runs after Stages 2–6 are complete. Audits the generated plan from the perspective of a senior PI or hostile reviewer: missing controls, untested confounders, sample sizes that don't match the effect size, alternative hypotheses the study can't distinguish, ethical concerns, reproducibility risks. Outputs an overall soundness rating, a prioritized list of concerns, and the strengths of the design (acknowledging what's done well is what makes the critique credible). Stage 8 Summary then incorporates these findings into its TL;DR and risk assessment.
+**What this stage does (plain English):** Runs after Stage 1 (lit review) and Stages 2–6 are complete. Audits the generated plan from the perspective of a senior PI or hostile reviewer: missing controls, untested confounders, sample sizes that don't match the effect size, alternative hypotheses the study can't distinguish, ethical concerns, reproducibility risks, and overstated novelty claims (cross-checked against the lit-review refs). Outputs an overall soundness rating, a prioritized list of concerns, and the strengths of the design (acknowledging what's done well is what makes the critique credible). Stage 8 Summary then incorporates these findings into its TL;DR and risk assessment.
 
 ```typescript
 // Open-ended category — common values listed in line, but new categories can appear.
@@ -708,7 +708,7 @@ const STAGE_CONTRACTS: Record<StageName, StageContract> = {
   timeline:   { stage: 'timeline',   reads: ['protocol'],   writes: ['timeline'],   parallel_safe: true },
   validation: { stage: 'validation', reads: ['hypothesis', 'protocol'], writes: ['validation'], parallel_safe: true },
   budget:     { stage: 'budget',     reads: ['materials'],  writes: ['budget'],     parallel_safe: true },
-  critique:   { stage: 'critique',   reads: ['hypothesis', 'protocol', 'materials', 'budget', 'timeline', 'validation'], writes: ['critique'], parallel_safe: true },
+  critique:   { stage: 'critique',   reads: ['hypothesis', 'lit_review', 'protocol', 'materials', 'budget', 'timeline', 'validation'], writes: ['critique'], parallel_safe: true },
   summary:    { stage: 'summary',    reads: ['hypothesis', 'lit_review', 'protocol', 'materials', 'budget', 'timeline', 'validation', 'critique'], writes: ['summary'], parallel_safe: false },
 };
 ```

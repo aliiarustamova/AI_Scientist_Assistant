@@ -54,7 +54,9 @@ export const STAGE_CONTRACTS: Record<StageName, StageContract> = {
   },
   critique: {
     stage: 'critique',
-    reads: ['hypothesis', 'protocol', 'materials', 'budget', 'timeline', 'validation'],
+    // Includes lit_review so the critique can evaluate novelty claims
+    // (DesignConcern.category 'novelty' requires seeing prior-work refs).
+    reads: ['hypothesis', 'lit_review', 'protocol', 'materials', 'budget', 'timeline', 'validation'],
     writes: ['critique'],
     parallel_safe: true,
   },

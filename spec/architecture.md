@@ -106,7 +106,7 @@ flowchart TB
     S4Op <--> Cache
     S4 -->|writes budget| Plan
 
-    Plan -->|reads protocol, materials,<br/>budget, timeline, validation| S7
+    Plan -->|reads lit_review, protocol,<br/>materials, budget, timeline, validation| S7
     S7 -->|writes critique| Plan
 
     Plan -->|reads all incl critique| S8
@@ -131,10 +131,10 @@ flowchart TB
 | 5. Timeline | `protocol` | `timeline` | yes |
 | 6. Validation | `hypothesis`, `protocol` | `validation` | yes |
 | 4. Budget | `materials` | `budget` | yes |
-| 7. Design Critique | `hypothesis`, `protocol`, `materials`, `budget`, `timeline`, `validation` | `critique` | yes |
+| 7. Design Critique | `hypothesis`, `lit_review`, `protocol`, `materials`, `budget`, `timeline`, `validation` | `critique` | yes |
 | 8. Summary | all 8 stage fields | `summary` | no (last) |
 
-Stages 1 and 2 can start immediately. 3, 5, 6 unlock when 2 completes. 4 unlocks when 3 completes. 7 unlocks when 3, 4, 5, 6 are all complete. 8 waits for everything including critique.
+Stages 1 and 2 can start immediately. 3, 5, 6 unlock when 2 completes. 4 unlocks when 3 completes. 7 unlocks when 1, 3, 4, 5, 6 are all complete (lit_review is a read dependency for novelty evaluation). 8 waits for everything including critique.
 
 ## Stage data shapes
 

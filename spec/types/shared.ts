@@ -11,7 +11,7 @@ export type Money = {
 export type Duration = string;
 
 export type Citation = {
-  source: string; // 'protocols.io' | 'tavily' | 'paper' | 'vendor' | 'llm_estimate' | ...
+  source: string; // 'protocols.io' | 'tavily' | 'paper' | 'vendor' | 'llm_estimate' | 'supplier_lookup' | ...
   confidence: 'high' | 'medium' | 'low';
   doi?: DOI;
   url?: URL;
