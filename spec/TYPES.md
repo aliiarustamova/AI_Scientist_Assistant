@@ -4,6 +4,8 @@
 
 Data contracts for the AI Scientist Assistant pipeline. Source of truth for what each stage consumes and emits. Mirrors the TypeScript files in `spec/types/`.
 
+> ⚠️ **Keep three things in sync:** the TypeScript types in [`spec/types/`](types/), the JSON Schema at [`spec/schemas/experiment-plan.schema.json`](schemas/experiment-plan.schema.json), and the descriptions in this doc. If you change a type, update all three in the same commit. Drift between them is a bug.
+
 ## Contents
 
 1. [Stages at a glance](#stages-at-a-glance)
