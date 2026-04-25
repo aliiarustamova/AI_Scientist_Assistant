@@ -17,8 +17,8 @@ Data contracts for the AI Scientist Assistant pipeline. Source of truth for what
 9. [Stage 4 — Budget](#stage-4--budget)
 10. [Stage 5 — Timeline](#stage-5--timeline)
 11. [Stage 6 — Validation](#stage-6--validation)
-12. [Stage 8 — Design Critique](#stage-8--design-critique)
-13. [Stage 7 — Summary & Final Plan](#stage-7--summary--final-plan)
+12. [Stage 7 — Design Critique](#stage-7--design-critique)
+13. [Stage 8 — Summary & Final Plan](#stage-8--summary--final-plan)
 14. [Stretch — Feedback Loop](#stretch--feedback-loop)
 15. [Storage layer (Supabase)](#storage-layer-supabase)
 
@@ -28,7 +28,7 @@ Data contracts for the AI Scientist Assistant pipeline. Source of truth for what
 
 Architecture is a **blackboard**: one shared `ExperimentPlan` document, every stage reads fields it depends on and writes its result back to a named field. No stage-to-stage handoffs.
 
-| | **1. Lit Review** | **2. Protocol** | **3. Materials** | **4. Budget** | **5. Timeline** | **6. Validation** | **8. Critique** | **7. Summary** |
+| | **1. Lit Review** | **2. Protocol** | **3. Materials** | **4. Budget** | **5. Timeline** | **6. Validation** | **7. Critique** | **8. Summary** |
 |---|---|---|---|---|---|---|---|---|
 | **Reads (`ExperimentPlan` fields)** | `hypothesis` | `hypothesis` | `protocol` | `materials` | `protocol` | `hypothesis`, `protocol` | `hypothesis`, `protocol`, `materials`, `budget`, `timeline`, `validation` | all 8 stage fields |
 | **Writes** | `lit_review` | `protocol` | `materials` | `budget` | `timeline` | `validation` | `critique` | `summary` |
@@ -41,7 +41,7 @@ Architecture is a **blackboard**: one shared `ExperimentPlan` document, every st
 | **Parallel-safe** | yes | yes | yes | yes | yes | yes | yes | no (last) |
 | **Feedback target** | — | yes (stretch) | yes (stretch) | yes (stretch) | yes (stretch) | yes (stretch) | yes (stretch) | — |
 
-**Scheduling:** Stages 1 and 2 unlock immediately (only need `hypothesis`). Stages 3, 5, 6 unlock when 2 completes. Stage 4 unlocks when 3 completes. Stage 8 (Critique) unlocks when 3, 4, 5, 6 are complete. Stage 7 waits for everything including critique.
+**Scheduling:** Stages 1 and 2 unlock immediately (only need `hypothesis`). Stages 3, 5, 6 unlock when 2 completes. Stage 4 unlocks when 3 completes. Stage 7 (Critique) unlocks when 3, 4, 5, 6 are complete. Stage 8 (Summary) waits for everything including critique.
 
 **Per-stage status** is tracked on `ExperimentPlan.status[stage_name]` as a `StageStatus` discriminated union (`not_started` / `running` / `complete` / `failed`).
 
@@ -207,8 +207,8 @@ Where each type is produced and consumed across the pipeline.
 | 4. Budget | `materials` | `budget` : `BudgetOutput` | Tavily supplier-page scrape (Thermo / Sigma / Promega / Qiagen / IDT / ATCC / Addgene); LLM estimate as fallback |
 | 5. Timeline | `protocol` | `timeline` : `TimelineOutput` | Derived from steps |
 | 6. Validation | `hypothesis`, `protocol` | `validation` : `ValidationOutput` | Protocol "expected results" |
-| 8. Design Critique | `hypothesis`, `protocol`, `materials`, `budget`, `timeline`, `validation` | `critique` : `DesignCritique` | LLM reviewer-perspective audit |
-| 7. Summary | all above incl. `critique` | `summary` : `SummaryOutput` | LLM final pass |
+| 7. Design Critique | `hypothesis`, `protocol`, `materials`, `budget`, `timeline`, `validation` | `critique` : `DesignCritique` | LLM reviewer-perspective audit |
+| 8. Summary | all above incl. `critique` | `summary` : `SummaryOutput` | LLM final pass |
 
 Stages 3, 5, 6 run in parallel after 2. Stage 4 depends on 3. Stage 7 waits for everything.
 
@@ -586,11 +586,9 @@ The `power_calculation` justifies the `n` cited in any `SuccessCriterion.thresho
 
 ---
 
-## Stage 8 — Design Critique
+## Stage 7 — Design Critique
 
-**What this stage does (plain English):** Runs after Stages 2–6 are complete. Audits the generated plan from the perspective of a senior PI or hostile reviewer: missing controls, untested confounders, sample sizes that don't match the effect size, alternative hypotheses the study can't distinguish, ethical concerns, reproducibility risks. Outputs an overall soundness rating, a prioritized list of concerns, and the strengths of the design (acknowledging what's done well is what makes the critique credible). Stage 7 Summary then incorporates these findings into its TL;DR and risk assessment.
-
-Numbered Stage 8 because it was added after the original 7-stage spec; in the runtime pipeline it sits between Stage 6 (Validation) and Stage 7 (Summary).
+**What this stage does (plain English):** Runs after Stages 2–6 are complete. Audits the generated plan from the perspective of a senior PI or hostile reviewer: missing controls, untested confounders, sample sizes that don't match the effect size, alternative hypotheses the study can't distinguish, ethical concerns, reproducibility risks. Outputs an overall soundness rating, a prioritized list of concerns, and the strengths of the design (acknowledging what's done well is what makes the critique credible). Stage 8 Summary then incorporates these findings into its TL;DR and risk assessment.
 
 ```typescript
 // Open-ended category — common values listed in line, but new categories can appear.
@@ -622,11 +620,11 @@ type DesignCritique = {
 
 ---
 
-## Stage 7 — Summary & Final Plan
+## Stage 8 — Summary & Final Plan
 
 `ExperimentPlan` is the **shared blackboard document**. It's created when the user submits a hypothesis (only `hypothesis`, `id`, `status`, and `meta` populated). Stages then write their named fields. The UI subscribes to it and renders whatever fields are present.
 
-Stage 7's job is to write the `summary` field — the TL;DR, key decisions, and risk assessment — once all other fields are populated.
+Stage 8's job is to write the `summary` field — the TL;DR, key decisions, and risk assessment — once all other fields are populated.
 
 ```typescript
 type RiskAssessment = {
@@ -882,8 +880,8 @@ spec/
     ├── budget.ts             ← Stage 4 field type + SupplierQuote
     ├── timeline.ts           ← Stage 5 field type
     ├── validation.ts         ← Stage 6 field type + PowerCalculation
-    ├── critique.ts           ← Stage 8 field type + DesignCritique
-    ├── summary.ts            ← Stage 7 field type + ExperimentPlan blackboard
+    ├── critique.ts           ← Stage 7 field type + DesignCritique
+    ├── summary.ts            ← Stage 8 field type + ExperimentPlan blackboard
     ├── stage-contracts.ts    ← STAGE_CONTRACTS reads/writes table for the orchestrator
     ├── feedback.ts           ← Stretch goal
     └── storage.ts            ← Supabase row shapes

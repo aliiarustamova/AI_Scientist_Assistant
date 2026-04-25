@@ -18,8 +18,8 @@ Eight stages share a single `ExperimentPlan` document (blackboard pattern). Each
 | 4. Budget | Tavily supplier scrape | `budget` |
 | 5. Timeline | derived from steps | `timeline` |
 | 6. Validation | derived from protocol | `validation` |
-| 8. Design Critique | LLM reviewer-perspective audit | `critique` |
-| 7. Summary | LLM final pass | `summary` |
+| 7. Design Critique | LLM reviewer-perspective audit | `critique` |
+| 8. Summary | LLM final pass | `summary` |
 
 Full architecture in [`spec/architecture.md`](spec/architecture.md). Type contracts in [`spec/TYPES.md`](spec/TYPES.md).
 

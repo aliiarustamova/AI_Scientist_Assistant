@@ -25,14 +25,14 @@ export type Citation = {
 export type Domain = string;
 
 export type StageName =
-  | 'lit_review'
-  | 'protocol'
-  | 'materials'
-  | 'budget'
-  | 'timeline'
-  | 'validation'
-  | 'critique'
-  | 'summary';
+  | 'lit_review'   // Stage 1
+  | 'protocol'     // Stage 2
+  | 'materials'    // Stage 3
+  | 'budget'       // Stage 4
+  | 'timeline'     // Stage 5
+  | 'validation'   // Stage 6
+  | 'critique'     // Stage 7
+  | 'summary';     // Stage 8
 
 export type StageStatus =
   | { state: 'not_started' }
