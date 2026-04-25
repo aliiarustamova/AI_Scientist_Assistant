@@ -293,7 +293,7 @@ type StageStatus =
 
 ## Stage 1 — Lit Review
 
-Conversational novelty check before plan generation. Searches via Tavily, lets the user interrogate results before committing.
+**What this stage does (plain English):** Before generating a plan, check whether this experiment has been done before. The user enters a hypothesis; the system searches the web (papers, preprints, prior protocols) via Tavily and returns a novelty signal — *not found*, *similar work exists*, or *exact match found* — plus 1–3 relevant references. The user can then chat back and forth ("what's different about this paper?", "how would my study extend it?") before deciding to proceed to plan generation. Conversation history is preserved for the rest of the session.
 
 ```typescript
 type LitReviewInput = {
@@ -337,7 +337,7 @@ type LitReviewSession = {
 
 ## Stage 2 — Protocol Generation
 
-Searches protocols.io, retrieves top-K matches, synthesizes a step-by-step protocol grounded in real cited sources.
+**What this stage does (plain English):** Searches protocols.io for protocols similar to the hypothesis, retrieves the top matches, and synthesizes a step-by-step methodology grounded in those real protocols. Each step cites the source DOI it drew from. Also lists the regulatory approvals likely needed (IACUC, IRB, biosafety) and how long they typically take to obtain — so a PI knows what they need to start before ordering reagents.
 
 ```typescript
 type ProtocolStep = {
@@ -357,23 +357,32 @@ type CitedProtocol = {
   contribution_weight: number;            // 0–1, how much it shaped the methodology
 };
 
+type RegulatoryRequirement = {
+  requirement: string;                    // 'IACUC approval', 'IRB approval', 'BSL-2 facility', 'IBC review', ...
+  authority: string;                      // 'institutional', 'FDA', 'NIH', 'OSHA', 'EPA', ...
+  applicable_because: string;             // condition triggering this requirement
+  estimated_lead_time?: Duration;         // e.g. "P3M" for typical 3-month IACUC review
+  notes?: string;
+};
+
 type ProtocolGenerationOutput = {
   experiment_type: string;                // e.g. "cryopreservation", "ELISA-replacement"
   domain: Domain;
   steps: ProtocolStep[];
   cited_protocols: CitedProtocol[];
+  regulatory_requirements: RegulatoryRequirement[];
   assumptions: string[];                  // e.g. "lab has BSL-2 hood"
   total_steps: number;
 };
 ```
 
-`experiment_type` is set once here and inherited downstream — it's the feedback bucketing key.
+`experiment_type` is set once here and inherited downstream — it's the feedback bucketing key. `regulatory_requirements` flags approvals that need to start before ordering reagents (IACUC alone often takes months).
 
 ---
 
 ## Stage 3 — Materials & Supply Chain
 
-Pulls structured materials data from protocols.io's materials endpoint, normalizes vendor/SKU. When protocols.io leaves a material vague (no SKU, generic vendor), falls back to a Tavily search of supplier domains (Sigma, Thermo, Promega, Qiagen, IDT, ATCC, Addgene) to resolve the catalog number. Resolved items carry `Citation.source = 'supplier_lookup'`.
+**What this stage does (plain English):** Pulls the structured materials list from each cited protocol on protocols.io. When that list is vague (e.g., "Tris buffer" with no SKU), falls back to a Tavily search of supplier domains (Sigma, Thermo, Promega, Qiagen, IDT, ATCC, Addgene) to resolve the catalog number. Output is a normalized shopping list with vendor, SKU, quantity, unit, storage requirements, and any safety hazards. Resolved items carry `Citation.source = 'supplier_lookup'`.
 
 ```typescript
 type MaterialCategory = string;           // 'reagent' | 'consumable' | 'equipment' | 'cell_line' | 'organism' | ...
@@ -413,7 +422,7 @@ type MaterialsOutput = {
 
 ## Stage 4 — Budget
 
-For each material, queries supplier product pages (via Tavily) to pull current pricing. Falls back to LLM estimation when no quote can be resolved. Every line item is tagged with its `BudgetSource` so the UI can show a confidence badge.
+**What this stage does (plain English):** For each material in Stage 3, queries supplier product pages (Thermo, Sigma, Promega, Qiagen, IDT, ATCC, Addgene) via Tavily to pull current pricing. Falls back to LLM estimation when no quote can be resolved. Every line item is tagged with where its price came from so the UI can show a confidence badge — high (scraped from a live product page), medium (cached recent quote), low (LLM-estimated). Output includes a per-category breakdown, a recommended contingency buffer, and a disclaimer.
 
 ```typescript
 type BudgetSource =
@@ -477,7 +486,7 @@ Tavily searches restricted to (or preferring) these domains for catalog # + pric
 
 ## Stage 5 — Timeline
 
-Phased breakdown derived from step durations and dependencies.
+**What this stage does (plain English):** Takes the protocol step durations from Stage 2 and groups them into phases (e.g., "cell expansion", "treatment", "analysis") with explicit dependencies between phases — what must finish before the next can start. Computes the critical path (longest sequence of dependent phases) and total experiment duration. Notes assumptions about staffing and workday length so a PI can adjust for their lab's reality.
 
 ```typescript
 type TimelineTask = {
@@ -798,13 +807,33 @@ spec/
     ├── index.ts              ← re-exports everything
     ├── shared.ts             ← ISO8601, DOI, Money, Duration, Citation, Hypothesis, StageName, StageStatus
     ├── lit-review.ts         ← Stage 1 field type
-    ├── protocol.ts           ← Stage 2 field type
+    ├── protocol.ts           ← Stage 2 field type + RegulatoryRequirement
     ├── materials.ts          ← Stage 3 field type
     ├── budget.ts             ← Stage 4 field type + SupplierQuote
     ├── timeline.ts           ← Stage 5 field type
-    ├── validation.ts         ← Stage 6 field type
+    ├── validation.ts         ← Stage 6 field type + PowerCalculation
     ├── summary.ts            ← Stage 7 field type + ExperimentPlan blackboard
     ├── stage-contracts.ts    ← STAGE_CONTRACTS reads/writes table for the orchestrator
     ├── feedback.ts           ← Stretch goal
     └── storage.ts            ← Supabase row shapes
 ```
+
+---
+
+## Glossary
+
+Quick definitions for terms used in this doc that may not be familiar.
+
+| Term | What it means |
+|---|---|
+| **Blackboard pattern** | Architectural style where stages don't pass data to each other — instead, they read from and write to a shared central document. Common in agent orchestration (LangGraph, CrewAI). Contrast with a pipeline where stage A's output is stage B's input. |
+| **Discriminated union** | A TypeScript pattern where multiple object shapes are unioned and a literal `kind`/`state` field tells you which shape you're holding. `StageStatus` is one — the `state` field tells you whether the other fields will be `started_at`, `completed_at`, or `error`. |
+| **JSON Pointer** | RFC 6901 syntax for addressing a specific field inside a JSON document, like `/steps/3/duration` to mean "the `duration` field of the 4th item in `steps`." We use it in `StageFeedback.target_field_path`. |
+| **pgvector** | Postgres extension for storing and similarity-searching vector embeddings (e.g., `text-embedding-3-small` outputs). Enables RAG over our protocol chunks without leaving Supabase. |
+| **JSONB** | Postgres binary JSON column type. Indexable, queryable, supports operators like `->>` and `@>`. We store `ExperimentPlan` as one JSONB row rather than splitting it across tables. |
+| **RAG** | Retrieval-Augmented Generation. We embed protocols.io content, retrieve the most relevant chunks at query time, and feed them to the LLM as context — so the LLM can synthesize a plan grounded in real protocols rather than hallucinating. |
+| **TTL** | Time-to-live. How long a cached value is considered fresh before we re-fetch. |
+| **ISO 8601 / ISO 4217** | Standards for date-times (`"2026-04-25T14:30:00Z"`), durations (`"PT2H30M"`), and currency codes (`"USD"`). Universal, JSON-friendly, parseable. |
+| **DOI** | Digital Object Identifier. The persistent URL-like reference used by every protocols.io protocol and most academic papers. |
+| **Few-shot** | Prompting an LLM with a few example input/output pairs before the actual question. Our stretch-goal feedback loop uses this — past corrections become few-shot examples for similar future plans. |
+| **Power calculation** | Statistical computation of the minimum sample size needed to detect an effect of a given size at a given confidence and power. The "why is `n=8`?" answer. |

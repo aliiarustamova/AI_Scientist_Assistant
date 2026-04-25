@@ -26,6 +26,13 @@ Full architecture in [`spec/architecture.md`](spec/architecture.md). Type contra
 
 React (via Lovable) → Vercel · Supabase (Postgres + pgvector + edge functions) · OpenRouter (Gemini 2.5 Flash) · protocols.io · Tavily.
 
+## Working on this
+
+- **Implementing a stage?** Read the relevant section in [`spec/TYPES.md`](spec/TYPES.md), then open the matching file in [`spec/types/`](spec/types/). The "Stages at a glance" matrix near the top of TYPES.md tells you exactly which fields your stage reads and writes.
+- **Orienting?** Read [`spec/architecture.md`](spec/architecture.md) — ~15 min, includes the system diagram.
+- **Need a type?** All public types are re-exported from [`spec/types/index.ts`](spec/types/index.ts). Import like `import type { ExperimentPlan } from '@/spec/types'`.
+- **Adding a new stage?** Add a new file under `spec/types/`, register a `StageContract` in `spec/types/stage-contracts.ts`, and document in `spec/TYPES.md`.
+
 ## Status
 
 Spec phase. Implementation pending.
