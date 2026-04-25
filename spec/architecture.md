@@ -160,7 +160,7 @@ Full TypeScript interfaces in `spec/types/`. Each stage writes its named field o
 - **Citations are first-class.** Every step, material, supplier quote, and budget line carries a `Citation` or `SupplierQuote` with source URL. Demo signal: tooltip "from DOI X" or "from Sigma product page (scraped 2026-04-25)."
 - **`experiment_type` is the feedback bucketing key.** Set once when Stage 2 writes `protocol.experiment_type`; inherited downstream. Few-shot retrieval keys off it.
 - **Honest gaps over hallucination.** Every stage output has `gaps` / `assumptions` / `failure_modes` fields — explicitly surface what the system couldn't resolve. A budget line marked `source: 'llm_estimate'` is honest; a fabricated SKU is not.
-- **Tavily caches into Supabase aggressively.** Every supplier quote and Tavily extraction is cached by URL. Re-running a similar plan reuses prior quotes within a TTL (e.g., 7 days).
+- **Cache every external fetch into Supabase.** protocols.io responses, Tavily search/extract results, supplier quotes, embeddings, and any other paid-or-rate-limited call gets cached by a deterministic key (URL, query hash, content hash) with a TTL appropriate to the data type — protocols rarely change (long TTL); supplier prices change (short TTL); embeddings are immutable per text. The cache is shared across all plans so retries and re-runs are nearly free.
 - **Each stage is independently testable.** Mock the plan with the stage's `reads` populated, run that stage in isolation. Important for parallel hackathon work.
 - **Progressive UI rendering.** UI subscribes to the plan document. Each populated field renders its section; missing fields show "generating…". No coordinated loading state.
 
