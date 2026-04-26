@@ -83,7 +83,12 @@ class LitReviewOutput(BaseModel):
     description: str
     references: list[Citation] = Field(max_length=3)
     searched_at: str
-    tavily_query: str
+    tavily_query: str  # the PRIMARY (most-specific) query; historical name
+    # Full ranked list of queries the multi-query rewrite produced. The
+    # primary query (specific) is at index 0; broader fallbacks follow.
+    # FE renders these as "Searched on: <q1> · also tried: <q2>, <q3>"
+    # so users see the breadth that produced the candidate pool.
+    queries_tried: list[str] = Field(default_factory=list)
     summary: str  # 3-4 sentence wrap-up at the bottom; LLM-generated. STRICT length cap.
 
 

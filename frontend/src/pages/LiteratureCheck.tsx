@@ -734,6 +734,35 @@ const LiteratureCheck = () => {
                 </p>
               </div>
 
+              {/* Searched-on chip — multi-query rewrite (specific →
+                  broad). The primary query (most specific) is shown
+                  prominently; broader fallbacks render as smaller
+                  "also tried" chips so users see how wide the net
+                  was cast. Only renders when the BE actually shipped
+                  queries_tried (post-multi-query upgrade); falls back
+                  to nothing on legacy responses. */}
+              {litResult?.queries_tried && litResult.queries_tried.length > 0 && (
+                <div className="mb-4 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-sm border border-rule bg-paper-raised px-4 py-2.5 font-mono-notebook text-[11px] uppercase tracking-[0.18em] text-ink-soft">
+                  <span className="text-muted-foreground">Searched on</span>
+                  <span className="rounded-sm border border-primary/30 bg-primary/[0.06] px-2 py-0.5 text-primary">
+                    {litResult.queries_tried[0]}
+                  </span>
+                  {litResult.queries_tried.length > 1 && (
+                    <>
+                      <span className="text-muted-foreground/70">also tried:</span>
+                      {litResult.queries_tried.slice(1).map((q) => (
+                        <span
+                          key={q}
+                          className="rounded-sm border border-rule bg-paper px-2 py-0.5 text-muted-foreground"
+                        >
+                          {q}
+                        </span>
+                      ))}
+                    </>
+                  )}
+                </div>
+              )}
+
               <ol className="overflow-hidden rounded-md border border-rule bg-paper-raised">
                 {references.map((p, i) => {
                   const isOpen = expandedId === p.id;

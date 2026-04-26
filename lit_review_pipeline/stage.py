@@ -47,17 +47,28 @@ from lit_review_pipeline.extractors import (
 )
 
 
-QUERY_REWRITE_SYSTEM = """You translate structured scientific hypotheses into precise scientific search queries for a Europe PMC novelty check.
+QUERY_REWRITE_SYSTEM = """You translate structured scientific hypotheses into 1-3 ranked Europe PMC search queries for a novelty check.
 
-Rules:
-- Output the query in ENGLISH ONLY. Do NOT translate technical terms into other languages.
-- 6-15 words.
+Output 1-3 queries, ONE PER LINE, ranked SPECIFIC → BROAD. The downstream pipeline runs each query and merges + dedupes results. The point of the ranking:
+  - Line 1 (most specific): catches an exact-match paper if one exists
+    → "VRC01 broadly neutralizing antibody HIV-1 NL4-3 CD4 T cells primary"
+  - Line 2 (medium): widens to the same intervention + outcome class
+    → "broadly neutralizing antibody HIV-1 inhibition primary CD4 T cells"
+  - Line 3 (broadest): widens to the methodological / topic family
+    → "HIV-1 neutralization assay CD4 T cells"
+
+Rules per query:
+- Output in ENGLISH ONLY. Do NOT translate technical terms into other languages.
+- 6-15 words each.
 - Use precise scientific terminology (gene names, organism names, chemical names, established assay names).
-- Focus on the specific intervention + measured outcome + system/subject.
 - Do NOT include years, dates, or recency hints.
 - Do NOT include hedge words ("can", "might", "study", "experiment").
 - Do NOT use Europe PMC field qualifiers (no AUTH:, TITLE:, etc.) — plain query terms only.
-- Output only the query string. No quotes, no labels, no explanation."""
+
+Format:
+- ONE QUERY PER LINE.
+- No quotes, no labels, no numbering, no explanation. Plain text queries only.
+- If the hypothesis is so narrow that broader queries would be uselessly noisy, output just one line. Otherwise prefer 2-3."""
 
 QUERY_REWRITE_USER_TMPL = """Subject: {subject}
 Independent variable: {independent}
@@ -133,7 +144,11 @@ Papers ({n} returned):
 {papers}"""
 
 
-def _rewrite_query(h: Hypothesis) -> str:
+def _rewrite_queries(h: Hypothesis) -> list[str]:
+    """Ask the LLM for 1-3 ranked queries (specific → broad). Returns a
+    de-duplicated list with the most specific first. Falls back to a
+    single-line response if the LLM ignored the multi-line instruction
+    (older behavior was a single string)."""
     s = h.structured
     user = QUERY_REWRITE_USER_TMPL.format(
         subject=s.subject,
@@ -143,12 +158,43 @@ def _rewrite_query(h: Hypothesis) -> str:
         expected=s.expected,
         research_question=s.research_question,
     )
-    raw = llm.complete(QUERY_REWRITE_SYSTEM, user).strip().strip('"').strip("'")
-    # The system prompt forbids prefixes/labels, but LLMs sometimes inject
-    # "Query: ...", "Search for: ...", or "Here's the query: ..." anyway.
-    # Strip those before passing to Europe PMC.
-    raw = _QUERY_FILLER_PREFIX_RE.sub("", raw, count=1).strip().strip('"').strip("'")
-    return raw
+    raw = llm.complete(QUERY_REWRITE_SYSTEM, user).strip()
+    queries: list[str] = []
+    seen: set[str] = set()
+    for line in raw.splitlines():
+        # Strip wrapping quotes + LLM-injected prefixes per-line. The
+        # system prompt forbids them, but Gemini Flash sometimes still
+        # writes "Query: ..." / "Search for: ..." on each query.
+        cleaned = line.strip().strip('"').strip("'")
+        cleaned = _QUERY_FILLER_PREFIX_RE.sub("", cleaned, count=1).strip().strip('"').strip("'")
+        if not cleaned or len(cleaned) < 6:
+            continue
+        # Skip lines that look like numbering ("1.", "1)", "•", etc.)
+        # and re-extract the actual query if there's a colon-prefix.
+        cleaned = re.sub(r"^[\s\-•\*]*\d*[.)\]]\s*", "", cleaned).strip()
+        cleaned = re.sub(r"^[a-z\s]+:\s*", "", cleaned, count=1, flags=re.IGNORECASE).strip()
+        if not cleaned:
+            continue
+        # Cap at 3 queries — beyond that we're paying for breadth without
+        # a meaningful relevance gain (Europe PMC's relevance ordering
+        # is already filtering noise inside each call).
+        key = cleaned.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        queries.append(cleaned)
+        if len(queries) >= 3:
+            break
+    # Defensive: never return empty. Fall back to a no-op string the
+    # LLM classifier will recognize as "no candidates".
+    if not queries:
+        queries = [s.research_question or s.subject or "(empty)"]
+    return queries
+
+
+# Kept for any external callers that imported the old single-query helper.
+def _rewrite_query(h: Hypothesis) -> str:
+    return _rewrite_queries(h)[0]
 
 
 # ----------------------------------------------------------------------------
@@ -426,20 +472,74 @@ def _classify(
 
 
 def run(plan: ExperimentPlan) -> LitReviewSession:
-    """Stage runner. Returns the LitReviewSession; caller writes it to plan.lit_review."""
+    """Stage runner. Returns the LitReviewSession; caller writes it to plan.lit_review.
+
+    Multi-query strategy (replaces the single-query rewrite):
+      1. LLM emits 1-3 ranked queries (specific → broad).
+      2. Each query → one Europe PMC call (page_size=8 each).
+      3. Dedupe by paper id (PMID/PMCID/DOI), keeping first seen.
+      4. Resulting union (~10-20 papers) goes to the LLM editorial pass,
+         which still picks at most 3 references but now has a wider
+         candidate pool and can prefer recent papers when relevance ties.
+
+    The LLM picks the SPECIFIC query first so an exact-match paper
+    surfaces near the top of the merged pool rather than getting buried
+    behind a broader query's results.
+    """
     h = plan.hypothesis
-    query = _rewrite_query(h)
-    # page_size=10 gives the LLM a wider candidate pool; the prompt still
-    # caps the chosen references at 3. Worth the marginal token cost.
-    epmc_response = europe_pmc.search_for_lit_review(query, page_size=10)
-    signal, description, refs, summary = _classify(h, query, epmc_response)
+    queries = _rewrite_queries(h)
+
+    # Per-query fetch + dedupe. Use page_size=8 each → up to 24 papers
+    # before dedupe, typically 10-18 unique after.
+    candidate_papers: list[dict] = []
+    seen_ids: set[str] = set()
+    per_query_responses: list[dict] = []
+    for q in queries:
+        try:
+            resp = europe_pmc.search_for_lit_review(q, page_size=8)
+        except Exception:
+            # One query failing shouldn't kill the whole stage. Continue
+            # with the other queries' results.
+            per_query_responses.append({"resultList": {"result": []}, "error": True})
+            continue
+        per_query_responses.append(resp)
+        for paper in (resp.get("resultList") or {}).get("result") or []:
+            # Dedupe key: prefer pmid > pmcid > doi > europe_pmc id.
+            pid = (
+                paper.get("pmid")
+                or paper.get("pmcid")
+                or paper.get("doi")
+                or paper.get("id")
+            )
+            key = str(pid).strip().lower() if pid else None
+            if key and key in seen_ids:
+                continue
+            if key:
+                seen_ids.add(key)
+            candidate_papers.append(paper)
+
+    # Reshape merged pool into the same `{"resultList": {"result": [...]}}`
+    # envelope `_classify` already understands. The CLASSIFY_USER_TMPL
+    # surfaces the query for context — pass the FIRST (most specific)
+    # query as the canonical one, since downstream FE keys off it.
+    primary_query = queries[0] if queries else ""
+    merged_response = {
+        "resultList": {"result": candidate_papers},
+        "hitCount": len(candidate_papers),
+        "queriesTried": queries,
+    }
+    signal, description, refs, summary = _classify(h, primary_query, merged_response)
 
     initial = LitReviewOutput(
         signal=signal,
         description=description,
         references=refs,
         searched_at=now(),
-        tavily_query=query,  # field name is historical; carries the EPMC query
+        # tavily_query is the historical primary-query field. Keep it for
+        # backward compatibility; new clients can read queries_tried for
+        # the full ranked list.
+        tavily_query=primary_query,
+        queries_tried=queries,
         summary=summary,
     )
 
@@ -448,6 +548,6 @@ def run(plan: ExperimentPlan) -> LitReviewSession:
         hypothesis_id=h.id,
         initial_result=initial,
         chat_history=[],
-        cached_search_context=json.dumps(epmc_response),
+        cached_search_context=json.dumps(merged_response),
         user_decision="pending",
     )
