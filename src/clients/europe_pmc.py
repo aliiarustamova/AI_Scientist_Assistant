@@ -19,7 +19,12 @@ import httpx
 from src.lib import cache
 
 _BASE_URL = "https://www.ebi.ac.uk/europepmc/webservices/rest"
-_LIT_REVIEW_TTL = 7 * 24 * 3600  # 7 days; bibliographic metadata is essentially static
+_LIT_REVIEW_TTL = 24 * 3600  # 1 day. Was 7 days, but the multi-query
+# rewrite means hypotheses iterating in the same session re-fire 2-3
+# different queries each — a long TTL was caching stale relevance
+# rankings against an evolving hypothesis. 24h still cuts ~95% of
+# duplicate-day calls without stranding researchers on a week-old pool
+# when they refine their question.
 
 # Module-level pooled client. Reuses TCP connections across calls — meaningful
 # when --all sweeps three samples back-to-back. Tests monkeypatch this attribute.

@@ -59,9 +59,10 @@ export type LitReviewResponse = {
   description: string;
   references: Citation[];
   searched_at: string;
-  tavily_query: string;   // legacy field name; populated with whatever query was sent
+  tavily_query: string;       // PRIMARY (most-specific) query; legacy field name
+  queries_tried?: string[];   // full ranked list — primary at index 0, broader fallbacks follow
   summary: string;
-  plan_id: string;        // <-- chains to /protocol and /materials
+  plan_id: string;            // <-- chains to /protocol and /materials
 };
 
 // ----- /protocol response -------------------------------------------------
