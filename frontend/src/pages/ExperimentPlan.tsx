@@ -1,11 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import {
+  CHAT_APPLIED_EVENT,
   postCritique,
   postMaterials,
   postProtocol,
   postTimeline,
   postValidation,
+  setActivePlanId,
+  type ChatAppliedEventDetail,
   type CritiqueOutput,
   type FEMaterialGroup,
   type FEMaterialsView,
@@ -26,10 +29,8 @@ import {
   ClipboardList,
   Coins,
   Download,
-  ExternalLink,
   FlaskConical,
   GitBranch,
-  LayoutList,
   PauseCircle,
   Pencil,
   Snowflake,
@@ -921,7 +922,6 @@ const ExperimentPlan = () => {
   // ticks through it on a scripted timer (preserved below for the design demo).
   const [stageIdx, setStageIdx] = useState(0);
   const [reveal, setReveal] = useState(0);
-  const [protocolView, setProtocolView] = useState<"text" | "flow">("text");
 
   // Real protocol + materials data from the backend. null = still loading
   // (or mock-only mode, in which case `useMockData` below is true). We
@@ -938,6 +938,36 @@ const ExperimentPlan = () => {
   const [apiError, setApiError] = useState<string | null>(null);
 
   const useMockData = !incomingPlanId && !incomingStructured;
+
+  // Register the active plan_id with the AI Assistant — the launcher is
+  // mounted globally and otherwise can't see this page's plan_id. Updates
+  // when /protocol resolves a fresh plan_id, or when one comes in via
+  // router state from /literature. Cleared on unmount so the launcher
+  // doesn't fire chat against a stale plan after the user navigates away.
+  useEffect(() => {
+    const id = apiPlanId || incomingPlanId || null;
+    setActivePlanId(id);
+    return () => setActivePlanId(null);
+  }, [apiPlanId, incomingPlanId]);
+
+  // Listen for the AI Assistant applying mutations — refresh the affected
+  // sections in place from the BE-rendered frontend_views the apply endpoint
+  // returns. Cheaper and tighter than re-running the whole /protocol -> ...
+  // chain after every chatbot edit.
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const ev = e as CustomEvent<ChatAppliedEventDetail>;
+      if (!ev.detail) return;
+      if (ev.detail.frontend_views.protocol) {
+        setApiProtocolView(ev.detail.frontend_views.protocol);
+      }
+      if (ev.detail.frontend_views.materials) {
+        setApiMaterialsView(ev.detail.frontend_views.materials);
+      }
+    };
+    window.addEventListener(CHAT_APPLIED_EVENT, handler);
+    return () => window.removeEventListener(CHAT_APPLIED_EVENT, handler);
+  }, []);
 
   useEffect(() => {
     if (useMockData) {
@@ -1658,46 +1688,12 @@ const ExperimentPlan = () => {
                   </button>
                 )}
 
-                <div
-                  role="tablist"
-                  aria-label="Protocol view mode"
-                  className="inline-flex items-center rounded-sm border border-rule bg-paper p-1"
-                >
-                  {(
-                    [
-                      { id: "text", label: "Text view", icon: LayoutList },
-                      { id: "flow", label: "Flowchart view", icon: GitBranch },
-                    ] as const
-                  ).map((opt) => {
-                    const active = protocolView === opt.id;
-                    const Icon = opt.icon;
-                    return (
-                      <button
-                        key={opt.id}
-                        type="button"
-                        role="tab"
-                        aria-selected={active}
-                        onClick={() => setProtocolView(opt.id)}
-                        className={
-                          "inline-flex items-center gap-2 rounded-[2px] px-3 py-1.5 font-mono-notebook text-[11px] uppercase tracking-[0.2em] transition-all " +
-                          (active
-                            ? "bg-ink text-paper"
-                            : "text-ink-soft hover:bg-rule-soft/60 hover:text-ink")
-                        }
-                      >
-                        <Icon className="h-3.5 w-3.5" strokeWidth={1.75} />
-                        {opt.label}
-                      </button>
-                    );
-                  })}
-                </div>
-                </div>
               </header>
 
               {/* TEXT VIEW — rich procedure-grouped when the backend ships
                   procedures[]; falls back to the original flat list for
                   mock-only mode and pre-Phase-2 backends. */}
-              {protocolView === "text" && hasRichProtocol && (
+              {hasRichProtocol && (
                 <div className="divide-y divide-rule">
                   {procedures.map((proc) => (
                     <ProcedureBlock
@@ -1711,7 +1707,7 @@ const ExperimentPlan = () => {
                 </div>
               )}
 
-              {protocolView === "text" && !hasRichProtocol && (
+              {!hasRichProtocol && (
                 <ol className="divide-y divide-rule">
                   {protocolSteps.map((s, i) => (
                     <li
@@ -1748,152 +1744,6 @@ const ExperimentPlan = () => {
                 </ol>
               )}
 
-              {/* FLOWCHART VIEW — grouped by phase, vertical linear flow */}
-              {protocolView === "flow" && (
-                <div className="px-7 py-8 sm:px-9 sm:py-10 animate-in fade-in duration-300">
-                  <div className="mx-auto flex max-w-2xl flex-col">
-                    {PHASE_ORDER.map((phase, phaseIdx) => {
-                      const stepsInPhase = protocolSteps
-                        .map((s, idx) => ({ ...s, idx }))
-                        .filter((s) => s.phase === phase);
-                      if (stepsInPhase.length === 0) return null;
-                      const meta = PHASE_META[phase];
-                      const isLastPhase = phaseIdx === PHASE_ORDER.length - 1;
-
-                      return (
-                        <div key={phase} className="relative">
-                          {/* Phase label */}
-                          <div className="flex items-center gap-3">
-                            <span
-                              aria-hidden
-                              className={"h-2 w-2 rounded-full " + meta.dot}
-                            />
-                            <p className="font-mono-notebook text-[11px] uppercase tracking-[0.24em] text-ink">
-                              {meta.label}
-                            </p>
-                            <span
-                              aria-hidden
-                              className="h-px flex-1 bg-rule"
-                            />
-                            <span className="font-mono-notebook text-[10px] uppercase tracking-[0.22em] text-muted-foreground">
-                              {stepsInPhase.length} step
-                              {stepsInPhase.length > 1 ? "s" : ""}
-                            </span>
-                          </div>
-
-                          {/* Step nodes */}
-                          <ol className="mt-5 flex flex-col items-stretch gap-0">
-                            {stepsInPhase.map((s, sIdx) => {
-                              const isLastInPhase =
-                                sIdx === stepsInPhase.length - 1;
-                              return (
-                                <li
-                                  key={s.idx}
-                                  className="flex flex-col items-center"
-                                >
-                                  {/* Card */}
-                                  <div
-                                    className={
-                                      "group/node w-full rounded-sm border bg-paper px-5 py-4 transition-all hover:-translate-y-[1px] hover:border-ink/60 " +
-                                      meta.border
-                                    }
-                                  >
-                                    <div className="flex items-start gap-4">
-                                      <span
-                                        className={
-                                          "flex h-9 w-9 shrink-0 items-center justify-center rounded-sm border font-mono-notebook text-[12px] tracking-wider text-ink " +
-                                          meta.border +
-                                          " " +
-                                          meta.tint
-                                        }
-                                      >
-                                        {String(s.idx + 1).padStart(2, "0")}
-                                      </span>
-                                      <div className="min-w-0 flex-1">
-                                        <h3 className="font-serif-card text-[18px] leading-[1.3] text-ink">
-                                          {s.title}
-                                        </h3>
-                                        {s.meta && (
-                                          <p className="mt-1.5 font-mono-notebook text-[11px] uppercase tracking-[0.2em] text-ink-soft">
-                                            {s.meta}
-                                          </p>
-                                        )}
-                                      </div>
-                                      {s.citation && (
-                                        <span
-                                          className="hidden shrink-0 items-center gap-1.5 rounded-sm border border-rule bg-paper-raised px-2 py-0.5 font-mono-notebook text-[10px] uppercase tracking-[0.2em] text-ink-soft sm:inline-flex"
-                                          title={s.citation}
-                                        >
-                                          <span
-                                            aria-hidden
-                                            className="h-1 w-1 rounded-full bg-sage"
-                                          />
-                                          cite
-                                        </span>
-                                      )}
-                                    </div>
-                                  </div>
-
-                                  {/* Connector to next step inside same phase */}
-                                  {!isLastInPhase && (
-                                    <div
-                                      aria-hidden
-                                      className="flex h-7 flex-col items-center"
-                                    >
-                                      <span className="h-full w-px bg-rule" />
-                                    </div>
-                                  )}
-                                </li>
-                              );
-                            })}
-                          </ol>
-
-                          {/* Connector between phases — arrow + thicker spacer */}
-                          {!isLastPhase && (
-                            <div
-                              aria-hidden
-                              className="my-4 flex flex-col items-center"
-                            >
-                              <span className="h-5 w-px bg-rule" />
-                              <span
-                                className={
-                                  "flex h-6 w-6 items-center justify-center rounded-full border bg-paper-raised " +
-                                  meta.border
-                                }
-                              >
-                                <ArrowRight
-                                  className="h-3 w-3 rotate-90 text-ink"
-                                  strokeWidth={1.75}
-                                />
-                              </span>
-                              <span className="h-5 w-px bg-rule" />
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-
-                  {/* Phase legend */}
-                  <div className="mx-auto mt-10 flex max-w-2xl flex-wrap items-center gap-3 border-t border-rule pt-5">
-                    <span className="font-mono-notebook text-[10px] uppercase tracking-[0.24em] text-muted-foreground">
-                      Phases
-                    </span>
-                    {PHASE_ORDER.map((p) => (
-                      <span
-                        key={p}
-                        className="inline-flex items-center gap-1.5 rounded-sm border border-rule bg-paper px-2 py-0.5 font-mono-notebook text-[10px] uppercase tracking-[0.2em] text-ink-soft"
-                      >
-                        <span
-                          aria-hidden
-                          className={"h-1.5 w-1.5 rounded-full " + PHASE_META[p].dot}
-                        />
-                        {p}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              )}
             </div>
           </section>
         )}
@@ -2100,20 +1950,14 @@ const ExperimentPlan = () => {
                           )}
                         </div>
 
-                        {/* RIGHT: structured procurement block.
-                            Tavily-enriched supplier / catalog / price
-                            when the BE could find them; falls back to
-                            "—" otherwise. The source-URL chip (when
-                            present) is the audit trail — the
-                            researcher can click through to the
-                            supplier page the data came from. */}
-                        <dl className="grid w-full shrink-0 grid-cols-2 gap-x-5 gap-y-1 border-t border-rule pt-4 sm:w-[22rem] sm:grid-cols-1 sm:border-l sm:border-t-0 sm:pl-6 sm:pt-0">
+                        {/* RIGHT: structured procurement block */}
+                        <dl className="grid w-full shrink-0 grid-cols-3 gap-x-5 gap-y-1 border-t border-rule pt-4 sm:w-[20rem] sm:grid-cols-1 sm:border-l sm:border-t-0 sm:pl-6 sm:pt-0">
                           <div className="sm:flex sm:items-baseline sm:justify-between sm:gap-3">
                             <dt className="font-mono-notebook text-[10px] uppercase tracking-[0.22em] text-muted-foreground">
                               Supplier
                             </dt>
                             <dd className="font-mono-notebook text-[11px] uppercase tracking-[0.18em] text-ink">
-                              {it.supplier && it.supplier !== "TBD" ? it.supplier : "—"}
+                              {it.supplier ?? "—"}
                             </dd>
                           </div>
                           <div className="sm:flex sm:items-baseline sm:justify-between sm:gap-3">
@@ -2121,19 +1965,9 @@ const ExperimentPlan = () => {
                               Catalog
                             </dt>
                             <dd className="font-mono-notebook text-[11px] uppercase tracking-[0.18em] text-ink-soft">
-                              {it.catalog && it.catalog !== "TBD" ? it.catalog : "—"}
+                              {it.catalog ?? "—"}
                             </dd>
                           </div>
-                          {it.price && (
-                            <div className="sm:flex sm:items-baseline sm:justify-between sm:gap-3">
-                              <dt className="font-mono-notebook text-[10px] uppercase tracking-[0.22em] text-muted-foreground">
-                                Price
-                              </dt>
-                              <dd className="font-mono-notebook text-[11px] uppercase tracking-[0.18em] text-primary">
-                                {it.price}
-                              </dd>
-                            </div>
-                          )}
                           <div className="sm:flex sm:items-baseline sm:justify-between sm:gap-3">
                             <dt className="font-mono-notebook text-[10px] uppercase tracking-[0.22em] text-muted-foreground">
                               Quantity
@@ -2142,20 +1976,6 @@ const ExperimentPlan = () => {
                               {it.qty}
                             </dd>
                           </div>
-                          {it.source_url && (
-                            <div className="col-span-full sm:flex sm:items-baseline sm:justify-end">
-                              <a
-                                href={it.source_url}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="inline-flex items-center gap-1 font-mono-notebook text-[10px] uppercase tracking-[0.18em] text-muted-foreground transition-colors hover:text-ink"
-                                title="Source the supplier / catalog / price was extracted from"
-                              >
-                                Source
-                                <ExternalLink className="h-3 w-3" strokeWidth={1.75} />
-                              </a>
-                            </div>
-                          )}
                         </dl>
                       </li>
                     ))}
