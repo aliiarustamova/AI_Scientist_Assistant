@@ -14,12 +14,13 @@ flowchart LR
     end
 
     subgraph Server["Flask — app.py"]
-        Endpoints["POST /lit-review<br/>POST /protocol-candidates<br/>POST /protocol · /protocol/pdf<br/>POST /materials<br/>POST /timeline · /validation<br/>POST /critique<br/>GET  /health"]
+        Endpoints["POST /lit-review<br/>POST /protocol-candidates<br/>POST /protocol · /protocol/pdf<br/>POST /materials<br/>POST /timeline · /validation<br/>POST /critique<br/>POST /chat · /chat/apply<br/>GET  /health"]
     end
 
     subgraph Pipelines["Stage pipelines (Python)"]
-        S1["lit_review_pipeline/<br/>Stage 1 — novelty"]
-        S2["protocol_pipeline/<br/>Stages 2, 3, 5, 6, 7<br/>(architect → writers → roll-up,<br/>+ timeline · validation · critique · pdf)"]
+        S1["lit_review_pipeline/<br/>Stage 1 — multi-query novelty"]
+        S2["protocol_pipeline/<br/>Stages 2, 3, 5, 6, 7<br/>(architect → writers → roll-up,<br/>+ timeline · validation · critique · pdf<br/>· materials_enrichment)"]
+        SChat["chat_pipeline.py<br/>AI Assistant<br/>(propose-then-apply<br/>over the blackboard)"]
     end
 
     subgraph Clients["src/clients/"]
@@ -45,6 +46,7 @@ flowchart LR
     Endpoints -->|reads / writes plan| Plan
     Endpoints --> S1
     Endpoints --> S2
+    Endpoints --> SChat
 
     S1 --> LLM
     S1 --> EPMC
@@ -54,6 +56,10 @@ flowchart LR
     S2 -->|loads samples| External2
     S2 --> Tavily
     Tavily --> External3
+
+    SChat -->|reads / mutates plan| Plan
+    SChat --> LLM
+
     LLM --> External4
 
     LLM <--> Cache
@@ -105,11 +111,22 @@ AI_Scientist_Assistant/
 │   ├── architect.py                  Emits the procedure outline (1 LLM call)
 │   ├── writer.py                     One LLM call per procedure (parallel)
 │   ├── materials.py                  Stage 3 — roll-up: dedup equipment + reagents
-│   ├── timeline.py                   Stage 5 — deterministic phase compute
+│   ├── materials_enrichment.py       Stage 3 enrichment — Tavily search + LLM extract
+│   │                                 (verified tier with source_url) and LLM
+│   │                                 best-guess fallback (estimate tier)
+│   ├── timeline.py                   Stage 5 — deterministic phase compute, with
+│   │                                 strict + partial / lower-bound durations
 │   ├── validation.py                 Stage 6 — criteria + failure modes
 │   ├── critique.py                   Stage 7 — reviewer-perspective audit
 │   ├── pdf.py                        Renders a printable protocol PDF
 │   └── frontend_view.py              Adapts rich Pydantic models → FE shape
+│
+├── chat_pipeline.py                  AI Assistant — propose-then-apply chat
+│                                     over the experiment-plan blackboard.
+│                                     Tools: update_protocol_step, add/update/
+│                                     remove_material. Pre-validates LLM tool
+│                                     calls against schema before rendering
+│                                     Apply cards on the FE.
 │
 ├── src/                              Shared library code
 │   ├── types.py                      Pydantic models (ExperimentPlan, …)
@@ -190,12 +207,13 @@ Stages call `llm.complete({ system, user, ... })` and the client picks the wire 
 
 | Stage | Endpoint | Pipeline file | Status |
 |---|---|---|---|
-| 1. Lit Review | `POST /lit-review` | `lit_review_pipeline/stage.py` | ✅ shipped |
-| 2. Protocol | `POST /protocol`, `POST /protocol-candidates` | `protocol_pipeline/stage.py` (+ `architect.py`, `writer.py`) | ✅ shipped |
-| 3. Materials | `POST /materials` | `protocol_pipeline/materials.py` | ✅ shipped |
-| 4. Budget | — | — | ⏳ pending (types + Tavily helper ready) |
-| 5. Timeline | `POST /timeline` | `protocol_pipeline/timeline.py` | ✅ shipped (deterministic) |
-| 6. Validation | `POST /validation` | `protocol_pipeline/validation.py` | ✅ shipped |
-| 7. Critique | `POST /critique` | `protocol_pipeline/critique.py` | ✅ shipped |
+| 1. Lit Review | `POST /lit-review` | `lit_review_pipeline/stage.py` | ✅ shipped — multi-query (specific → broad), per-reference `key_differences`, `queries_tried` surfaced on FE |
+| 2. Protocol | `POST /protocol`, `POST /protocol-candidates` | `protocol_pipeline/stage.py` (+ `architect.py`, `writer.py`) | ✅ shipped — researcher candidate-selection flow with notes |
+| 3. Materials | `POST /materials` | `protocol_pipeline/materials.py` + `materials_enrichment.py` | ✅ shipped — every row enriched (verified or estimate tier), with skip-list for non-procurable items |
+| 4. Budget | (FE compute) | (no pipeline module) | ✅ shipped — real per-group USD subtotals on `/plan` from Tavily-cited prices, with "(N/M priced)" honesty markers |
+| 5. Timeline | `POST /timeline` | `protocol_pipeline/timeline.py` | ✅ shipped (deterministic) — strict + partial / lower-bound durations |
+| 6. Validation | `POST /validation` | `protocol_pipeline/validation.py` | ✅ shipped — power calculation, controls, citation-validated failure modes |
+| 7. Critique | `POST /critique` | `protocol_pipeline/critique.py` | ✅ shipped — risks + confounders, every entry citation-validated; deterministic recommendation derivation |
 | 8. Summary | — | — | ⏳ pending |
-| Bonus | `POST /protocol/pdf` | `protocol_pipeline/pdf.py` | ✅ shipped |
+| Bonus | `POST /protocol/pdf` | `protocol_pipeline/pdf.py` | ✅ shipped — server-side reportlab render |
+| Bonus | `POST /chat`, `POST /chat/apply` | `chat_pipeline.py` | ✅ shipped — propose-then-apply over the blackboard, schema-validated tool calls |
