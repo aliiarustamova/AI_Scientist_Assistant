@@ -8,6 +8,7 @@ import {
   type StructuredHypothesis,
 } from "@/lib/api";
 import {
+  AlertTriangle,
   ArrowRight,
   Beaker,
   Check,
@@ -454,6 +455,27 @@ const ExperimentPlan = () => {
       </header>
 
       <main className="relative mx-auto max-w-5xl px-6 pb-24 pt-12 sm:px-10 sm:pt-16">
+        {apiError && (
+          <section
+            aria-label="Generation error"
+            role="alert"
+            className="mb-8 relative overflow-hidden rounded-md border border-destructive/30 bg-paper-raised"
+          >
+            <span aria-hidden className="absolute inset-y-0 left-0 w-[3px] bg-destructive" />
+            <div className="flex items-start gap-4 px-7 py-5">
+              <AlertTriangle aria-hidden className="mt-0.5 h-4 w-4 flex-shrink-0 text-destructive" />
+              <div className="space-y-1.5">
+                <p className="font-mono-notebook text-[11px] uppercase tracking-[0.22em] text-destructive">
+                  Live generation failed — showing demo data
+                </p>
+                <p className="text-[14px] leading-[1.55] text-ink-soft">
+                  {apiError}
+                </p>
+              </div>
+            </div>
+          </section>
+        )}
+
         {/* Step indicator + recap */}
         <section aria-labelledby="page-title" className="mb-12">
           <p className="font-mono-notebook text-[13px] uppercase tracking-[0.22em] text-muted-foreground">

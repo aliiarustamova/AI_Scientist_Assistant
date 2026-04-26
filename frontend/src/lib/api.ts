@@ -123,10 +123,32 @@ export class ApiException extends Error {
   status: number;
   body: ApiError;
   constructor(status: number, body: ApiError) {
-    super(typeof body.detail === "string" ? body.detail : body.error);
+    super(formatApiErrorMessage(body));
     this.status = status;
     this.body = body;
   }
+}
+
+// Pydantic's ValidationError.errors() yields an array of {loc, msg, type, ...}.
+// Surface "<dotted.path>: <msg>" so the user sees which field failed instead
+// of just "validation_error".
+function formatApiErrorMessage(body: ApiError): string {
+  if (typeof body.detail === "string") return body.detail;
+  if (Array.isArray(body.detail) && body.detail.length > 0) {
+    const parts = body.detail.map((d) => {
+      if (typeof d !== "object" || d === null) return String(d);
+      const item = d as { loc?: unknown; msg?: unknown };
+      const msg = typeof item.msg === "string" ? item.msg : JSON.stringify(d);
+      const path = Array.isArray(item.loc)
+        ? item.loc
+            .filter((p) => typeof p === "string" || typeof p === "number")
+            .join(".")
+        : "";
+      return path ? `${path}: ${msg}` : msg;
+    });
+    return parts.join("; ");
+  }
+  return body.error;
 }
 
 // ----- Internals ---------------------------------------------------------
