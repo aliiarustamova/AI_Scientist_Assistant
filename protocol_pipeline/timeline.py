@@ -34,7 +34,7 @@ from src.types import (
 )
 
 # Reuse the ISO duration math we already have in the orchestrator.
-from .stage import _sum_iso8601_durations
+from .stage import _iso_duration_to_seconds, _seconds_to_iso_duration, _sum_iso8601_durations
 
 
 def compute_timeline(protocol: ProtocolGenerationOutput) -> TimelineOutput:
@@ -50,13 +50,6 @@ def compute_timeline(protocol: ProtocolGenerationOutput) -> TimelineOutput:
     # Map: procedure_index -> step_n offset for the global flat step
     # numbering (matches ProtocolGenerationOutput.steps[].n).
     flat_step_counter = 1
-
-    # Lazy import — timeline.py is itself imported lazily by stage.py,
-    # but _iso_duration_to_seconds lives in stage.py and we use it here
-    # to distinguish "has a duration string" from "parses as ISO 8601".
-    # The two counts diverge when the writer emits "30 min" or "PT" or
-    # other non-conforming strings.
-    from .stage import _iso_duration_to_seconds
 
     for proc_index, proc in enumerate(protocol.procedures, start=1):
         tasks: list[TimelineTask] = []
@@ -95,6 +88,20 @@ def compute_timeline(protocol: ProtocolGenerationOutput) -> TimelineOutput:
         # we want: a phase with partial duration data shouldn't claim
         # a wall-clock total.
         phase_duration = _sum_iso8601_durations([t.duration for t in tasks])
+
+        # ALSO compute a best-effort partial sum across just the steps
+        # that DO parse, regardless of coverage. The FE renders this as
+        # a lower bound ("≥ 56 min") when the strict sum is None — so
+        # an 80%-covered procedure surfaces useful info rather than a
+        # blanket "INCOMPLETE" chip.
+        parseable_seconds = sum(
+            (_iso_duration_to_seconds(t.duration) or 0.0)
+            for t in tasks if t.duration
+        )
+        partial_phase_duration = (
+            _seconds_to_iso_duration(parseable_seconds)
+            if parseable_seconds > 0 else None
+        )
 
         # Methodology — explicit, plain-English description so the user
         # can audit / reproduce. Three failure shapes to distinguish:
@@ -147,6 +154,7 @@ def compute_timeline(protocol: ProtocolGenerationOutput) -> TimelineOutput:
             id=f"phase-{proc_index}",
             name=proc.name,
             duration=phase_duration,
+            partial_duration=partial_phase_duration,
             tasks=tasks,
             depends_on=depends_on,
             parallel_with=[],   # not auto-detected
@@ -160,6 +168,22 @@ def compute_timeline(protocol: ProtocolGenerationOutput) -> TimelineOutput:
     # durations we just computed — same conservative semantics.
     total = protocol.total_duration or _sum_iso8601_durations(
         [p.duration for p in phases]
+    )
+
+    # Partial total: lower-bound across whatever parseable phase data we
+    # have. Always populated when at least one phase has any parseable
+    # duration. The FE renders this prefixed with "≥" when `total` is
+    # None — so users see a useful floor rather than "INCOMPLETE".
+    partial_total_seconds = 0.0
+    for p in phases:
+        d = p.duration or p.partial_duration
+        if d:
+            sec = _iso_duration_to_seconds(d)
+            if sec is not None:
+                partial_total_seconds += sec
+    partial_total = (
+        _seconds_to_iso_duration(partial_total_seconds)
+        if partial_total_seconds > 0 else None
     )
 
     # Critical path: linear pipeline -> all phases in order. When
@@ -193,6 +217,7 @@ def compute_timeline(protocol: ProtocolGenerationOutput) -> TimelineOutput:
     return TimelineOutput(
         phases=phases,
         total_duration=total,
+        partial_total_duration=partial_total,
         critical_path=critical_path,
         assumptions=assumptions,
         earliest_completion_date=None,

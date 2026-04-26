@@ -139,13 +139,17 @@ class FEReagent(BaseModel):
     # the materials list to the steps that use it ("Used in 2.1, 3.4").
     used_in_steps: list[str] = Field(default_factory=list)
     material_id: str = ""
-    # Tavily enrichment (best-effort). Populated by
+    # Materials enrichment (best-effort). Populated by
     # protocol_pipeline.materials_enrichment after adapt_materials.
-    # `source_url` is REQUIRED for the FE to render any enriched
-    # field — without it, the value isn't auditable so we treat it
-    # as if the lookup failed (drop the price/supplier/catalog).
+    # Two tiers:
+    #   - "verified": Tavily found a supplier page; LLM extracted
+    #     supplier / catalog / price citing source_url.
+    #   - "estimate": LLM best-guess from training data when Tavily
+    #     returned nothing usable. No source_url; FE renders a
+    #     "BEST-GUESS" badge.
     price: Optional[str] = None        # e.g. "$45 / 500g"
-    source_url: Optional[str] = None   # supplier page where the data was found
+    source_url: Optional[str] = None   # supplier page (verified tier only)
+    confidence: Optional[str] = None   # "verified" | "estimate" | None (un-enriched)
 
 
 class FEMaterialGroup(BaseModel):

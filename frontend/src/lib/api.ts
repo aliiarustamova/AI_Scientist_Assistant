@@ -168,7 +168,8 @@ export type FEReagent = {
   // the FE can rely on it being non-null whenever the other enriched
   // fields are non-null.
   price?: string;        // e.g. "$45 / 500g"
-  source_url?: string;   // supplier page where supplier/catalog/price came from
+  source_url?: string;   // supplier page where supplier/catalog/price came from (verified tier only)
+  confidence?: "verified" | "estimate";  // "estimate" = LLM best-guess, no web citation
 };
 
 export type FEMaterialGroup = {
@@ -207,7 +208,8 @@ export type TimelineTask = {
 export type TimelinePhase = {
   id: string;                 // "phase-{procedure_index}"
   name: string;
-  duration?: string;          // null when ANY task duration is missing
+  duration?: string;          // STRICT — null when ANY task duration is missing/unparseable
+  partial_duration?: string;  // best-effort lower bound; sum of parseable task durations
   tasks: TimelineTask[];
   depends_on: string[];
   parallel_with: string[];
@@ -218,8 +220,9 @@ export type TimelinePhase = {
 
 export type TimelineOutput = {
   phases: TimelinePhase[];
-  total_duration?: string;    // null when ANY phase is missing
-  critical_path: string[];    // phase IDs in dependency order
+  total_duration?: string;          // STRICT — null when ANY phase is partial
+  partial_total_duration?: string;  // best-effort lower bound across phases
+  critical_path: string[];          // phase IDs in dependency order
   assumptions: string[];
   earliest_completion_date?: string;
   generated_at: string;

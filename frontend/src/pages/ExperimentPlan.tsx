@@ -2025,6 +2025,21 @@ const ExperimentPlan = () => {
                             Price links to source_url when present so the
                             researcher can verify the quote. */}
                         <dl className="grid w-full shrink-0 grid-cols-2 gap-x-5 gap-y-2 border-t border-rule pt-4 sm:w-[20rem] sm:grid-cols-1 sm:gap-y-1 sm:border-l sm:border-t-0 sm:pl-6 sm:pt-0">
+                          {/* "BEST-GUESS" chip when the data came from
+                              the LLM-estimate fallback rather than a
+                              Tavily-verified extraction. Spans both
+                              columns so it sits at the top of the
+                              procurement block. */}
+                          {it.confidence === "estimate" && (
+                            <div className="col-span-2 sm:col-span-1">
+                              <span
+                                className="inline-flex items-center gap-1 rounded-sm border border-[hsl(38_70%_55%)]/40 bg-[hsl(38_70%_92%)]/40 px-2 py-0.5 font-mono-notebook text-[9px] uppercase tracking-[0.22em] text-[hsl(28_55%_30%)]"
+                                title="LLM best-guess from training data — not verified against a supplier page. Re-check before purchasing."
+                              >
+                                Best-guess (LLM)
+                              </span>
+                            </div>
+                          )}
                           <div className="sm:flex sm:items-baseline sm:justify-between sm:gap-3">
                             <dt className="font-mono-notebook text-[10px] uppercase tracking-[0.22em] text-muted-foreground">
                               Supplier
@@ -2194,9 +2209,15 @@ const ExperimentPlan = () => {
                     <p className="font-mono-notebook text-[11px] uppercase tracking-[0.22em] text-muted-foreground">
                       Timeline
                     </p>
+                    {/* Header chip: prefer the strict total; fall back
+                        to the partial total prefixed with "≥" so users
+                        get a useful lower bound instead of a blanket
+                        "incomplete". */}
                     <p className="font-mono-notebook text-[11px] uppercase tracking-[0.2em] text-ink-soft">
                       {apiTimeline.total_duration
                         ? humanizeDuration(apiTimeline.total_duration)
+                        : apiTimeline.partial_total_duration
+                        ? `≥ ${humanizeDuration(apiTimeline.partial_total_duration)} (partial)`
                         : "Estimate incomplete"}
                     </p>
                   </div>
@@ -2219,12 +2240,23 @@ const ExperimentPlan = () => {
                             >
                               {p.name}
                             </p>
-                            {p.duration && (
+                            {p.duration ? (
                               <span className="inline-flex items-center gap-1.5 rounded-sm border border-rule bg-paper px-2 py-0.5 font-mono-notebook text-[10px] uppercase tracking-[0.18em] text-ink-soft">
                                 <Timer aria-hidden className="h-3 w-3" strokeWidth={1.75} />
                                 {humanizeDuration(p.duration)}
                               </span>
-                            )}
+                            ) : p.partial_duration ? (
+                              // Lower-bound chip when not every step has
+                              // a parseable duration. The methodology
+                              // line below explains why it's partial.
+                              <span
+                                className="inline-flex items-center gap-1.5 rounded-sm border border-[hsl(38_70%_55%)]/40 bg-[hsl(38_70%_92%)]/30 px-2 py-0.5 font-mono-notebook text-[10px] uppercase tracking-[0.18em] text-[hsl(28_55%_30%)]"
+                                title="Lower bound — sum of the steps that had a parseable duration. See methodology for which steps were missing."
+                              >
+                                <Timer aria-hidden className="h-3 w-3" strokeWidth={1.75} />
+                                ≥ {humanizeDuration(p.partial_duration)}
+                              </span>
+                            ) : null}
                             {/* Coverage chip — defensibility: shows
                                 what fraction of steps had duration data
                                 feeding this phase's number. */}
