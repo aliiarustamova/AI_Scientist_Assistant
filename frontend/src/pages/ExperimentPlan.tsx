@@ -776,7 +776,6 @@ const ExperimentPlan = () => {
     () => apiMaterialsView?.groups ?? MATERIALS,
     [apiMaterialsView],
   );
-  const materialsGaps = apiMaterialsView?.gaps ?? [];
 
   const generating = reveal < 4;
 
@@ -1456,30 +1455,12 @@ const ExperimentPlan = () => {
               </span>
             </div>
 
-            {/* Materials gaps — items the LLM couldn't ground (no supplier
-                spec, missing concentration, ambiguous brand). The PI must
-                resolve these before ordering, so we surface them as a
-                yellow callout above the list rather than burying in JSON. */}
-            {materialsGaps.length > 0 && (
-              <div className="mb-4 overflow-hidden rounded-md border border-[hsl(38_70%_55%)]/40 bg-[hsl(38_70%_92%)]/40">
-                <div className="flex items-start gap-3 px-5 py-3 border-b border-[hsl(38_70%_55%)]/30">
-                  <AlertTriangle aria-hidden className="mt-0.5 h-4 w-4 flex-shrink-0 text-[hsl(28_55%_30%)]" strokeWidth={2} />
-                  <div>
-                    <p className="font-mono-notebook text-[11px] uppercase tracking-[0.22em] text-[hsl(28_55%_30%)]">
-                      {materialsGaps.length} item{materialsGaps.length === 1 ? "" : "s"} need a researcher decision
-                    </p>
-                    <p className="mt-0.5 text-[12px] leading-[1.5] text-[hsl(28_55%_25%)]">
-                      Resolve these before ordering — supplier, grade, or specification was not determined.
-                    </p>
-                  </div>
-                </div>
-                <ul className="px-5 py-3 space-y-1 list-disc pl-10 text-[13px] leading-[1.55] text-[hsl(28_55%_25%)]">
-                  {materialsGaps.map((gap, i) => (
-                    <li key={i}>{gap}</li>
-                  ))}
-                </ul>
-              </div>
-            )}
+            {/* Materials gaps callout removed for now — most "gap" items
+                from the LLM are actually Stage 4 supplier-lookup territory
+                (catalog numbers, exact stock concentrations) and read as
+                noise to the researcher. The data still flows through in
+                `apiMaterialsView.gaps`; we can render it again selectively
+                once Stage 4 lands and the gaps narrow to genuine unknowns. */}
 
             <div className="overflow-hidden rounded-md border border-rule bg-paper-raised">
               {materialGroups.map((group, gi) => (
