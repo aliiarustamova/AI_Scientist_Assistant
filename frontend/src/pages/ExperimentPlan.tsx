@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import {
   postMaterials,
@@ -31,8 +31,14 @@ import {
 import { Button } from "@/components/ui/button";
 import type { ProtocolSourceSelection } from "./ProtocolSources";
 
-const HYPOTHESIS_SUMMARY =
-  "Increasing glucose concentration in M9 minimal media reduces the specific growth rate of E. coli K-12 above 10 mM, due to catabolite repression under aerobic conditions at 37 °C.";
+function formatHypothesis(structured?: StructuredHypothesis) {
+  if (!structured) return "No hypothesis provided.";
+
+  return (
+    structured.research_question ||
+    `${structured.independent} affects ${structured.dependent} in ${structured.subject} under ${structured.conditions}.`
+  );
+}
 
 type Phase = "Preparation" | "Experiment" | "Measurement" | "Analysis";
 
@@ -701,6 +707,30 @@ const ExperimentPlan = () => {
 
   const useMockData = !incomingPlanId && !incomingStructured;
 
+  const scrollToPlanSection = useCallback((id: string) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const details = el.closest("details");
+    if (details) details.open = true;
+    el.scrollIntoView({ behavior: "smooth", block: "start" });
+    const { pathname, search } = window.location;
+    window.history.replaceState(null, "", `${pathname}${search}#${id}`);
+  }, []);
+
+  const initialHashScrolled = useRef(false);
+  useEffect(() => {
+    if (reveal < 1 || initialHashScrolled.current) return;
+    const id = window.location.hash.replace(/^#/, "");
+    if (!id) return;
+    const t = window.setTimeout(() => {
+      if (document.getElementById(id)) {
+        initialHashScrolled.current = true;
+        scrollToPlanSection(id);
+      }
+    }, 50);
+    return () => window.clearTimeout(t);
+  }, [reveal, scrollToPlanSection]);
+
   useEffect(() => {
     if (useMockData) {
       // Design-mockup path: scripted reveal so the page demos without a backend.
@@ -955,7 +985,7 @@ const ExperimentPlan = () => {
               className="px-6 py-5 text-[20px] leading-[1.55] text-ink"
               style={{ fontFamily: '"Instrument Serif", Georgia, serif' }}
             >
-              {HYPOTHESIS_SUMMARY}
+              {formatHypothesis(navState?.structured)}
             </p>
           </div>
 
@@ -991,6 +1021,10 @@ const ExperimentPlan = () => {
                 <a
                   key={i}
                   href="#materials-title"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    scrollToPlanSection("materials-title");
+                  }}
                   className="group flex items-center gap-3 rounded-md border border-rule bg-paper-raised px-4 py-3 transition-colors hover:border-ink/30"
                 >
                   <span className="flex h-8 w-8 items-center justify-center rounded-sm border border-rule bg-paper text-ink-soft">
@@ -1031,6 +1065,10 @@ const ExperimentPlan = () => {
                   <li key={item.id}>
                     <a
                       href={`#${item.id}`}
+                      onClick={(e) => {
+                        e.preventDefault();
+                        scrollToPlanSection(item.id);
+                      }}
                       className="inline-flex items-center rounded-sm border border-rule bg-paper px-2.5 py-1 font-mono-notebook text-[11px] uppercase tracking-[0.18em] text-ink-soft transition-colors hover:border-ink/40 hover:text-ink"
                     >
                       {item.label}
@@ -1117,7 +1155,7 @@ const ExperimentPlan = () => {
                     </p>
                     <h2
                       id="protocol-title"
-                      className="mt-1.5 font-serif-display text-[34px] leading-tight text-ink"
+                      className="mt-1.5 scroll-mt-28 font-serif-display text-[34px] leading-tight text-ink"
                     >
                       Protocol
                     </h2>
@@ -1384,7 +1422,7 @@ const ExperimentPlan = () => {
                 <Beaker className="h-4 w-4 text-ink-soft" strokeWidth={1.5} />
                 <h2
                   id="materials-title"
-                  className="font-serif-display text-[26px] leading-tight text-ink"
+                  className="scroll-mt-28 font-serif-display text-[26px] leading-tight text-ink"
                 >
                   Materials
                 </h2>
@@ -1621,7 +1659,7 @@ const ExperimentPlan = () => {
                 <Coins className="h-4 w-4 self-center text-ink-soft" strokeWidth={1.5} />
                 <h2
                   id="budget-title"
-                  className="font-serif-display text-[26px] leading-tight text-ink"
+                  className="scroll-mt-28 font-serif-display text-[26px] leading-tight text-ink"
                 >
                   Budget &amp; timeline
                 </h2>
@@ -1727,7 +1765,7 @@ const ExperimentPlan = () => {
                 <Target className="h-4 w-4 self-center text-ink-soft" strokeWidth={1.5} />
                 <h2
                   id="validation-title"
-                  className="font-serif-display text-[26px] leading-tight text-ink"
+                  className="scroll-mt-28 font-serif-display text-[26px] leading-tight text-ink"
                 >
                   Validation
                 </h2>
@@ -1784,7 +1822,7 @@ const ExperimentPlan = () => {
                 <FlaskConical className="h-4 w-4 self-center text-ink-soft" strokeWidth={1.5} />
                 <h2
                   id="feasibility-title"
-                  className="font-serif-display text-[26px] leading-tight text-ink"
+                  className="scroll-mt-28 font-serif-display text-[26px] leading-tight text-ink"
                 >
                   Feasibility
                 </h2>
