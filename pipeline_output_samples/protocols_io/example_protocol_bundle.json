@@ -1,0 +1,109 @@
+{
+  "grounding_status": "success",
+  "selection_mode": "auto",
+  "selected_protocol": {
+    "id": "313838",
+    "title": "Cryopreservation of mammalian cells using controlled-rate freezing",
+    "description": "Example normalized protocol candidate showing the kind of search result that can be selected for grounding.",
+    "url": "https://www.protocols.io/view/example-cryopreservation-protocol-313838",
+    "doi": "10.17504/protocols.io.example313838",
+    "uri": "https://www.protocols.io/view/example-cryopreservation-protocol-313838",
+    "source": "protocols.io",
+    "materials_available": true,
+    "steps_available": true,
+    "relevance_reason": "",
+    "relevance_score": null
+  },
+  "candidates": [
+    {
+      "id": "313838",
+      "title": "Cryopreservation of mammalian cells using controlled-rate freezing",
+      "description": "Example normalized protocol candidate showing the kind of search result that can be selected for grounding.",
+      "url": "https://www.protocols.io/view/example-cryopreservation-protocol-313838",
+      "doi": "10.17504/protocols.io.example313838",
+      "uri": "https://www.protocols.io/view/example-cryopreservation-protocol-313838",
+      "source": "protocols.io",
+      "materials_available": true,
+      "steps_available": true,
+      "relevance_reason": "",
+      "relevance_score": null
+    },
+    {
+      "id": "313839",
+      "title": "Post-thaw viability workflow for adherent mammalian cells",
+      "description": "Second candidate illustrating the list of nearby protocols available to the selector.",
+      "url": "https://www.protocols.io/view/example-post-thaw-viability-313839",
+      "doi": "10.17504/protocols.io.example313839",
+      "uri": "https://www.protocols.io/view/example-post-thaw-viability-313839",
+      "source": "protocols.io",
+      "materials_available": false,
+      "steps_available": true,
+      "relevance_reason": "",
+      "relevance_score": null
+    }
+  ],
+  "steps": [
+    {
+      "step_number": 1,
+      "title": "Expand cells to target confluence",
+      "description": "Grow HeLa cells under standard culture conditions until they reach 70 to 80 percent confluence before harvest.",
+      "image_url": null
+    },
+    {
+      "step_number": 2,
+      "title": "Prepare freezing suspension",
+      "description": "Harvest cells, count viable cells, and resuspend at the target density in cryopreservation medium.",
+      "image_url": null
+    },
+    {
+      "step_number": 3,
+      "title": "Freeze using controlled-rate cooling",
+      "description": "Aliquot cells into cryovials and cool at approximately minus 1 degree C per minute before long-term storage.",
+      "image_url": null
+    },
+    {
+      "step_number": 4,
+      "title": "Thaw and wash cells",
+      "description": "Rapidly thaw cryovials in a 37 C water bath and dilute cells into pre-warmed medium before centrifugation.",
+      "image_url": null
+    }
+  ],
+  "materials": [
+    {
+      "name": "HeLa cells",
+      "quantity": "1",
+      "unit": "vial",
+      "vendor": "ATCC",
+      "sku": "CCL-2",
+      "url": "https://www.atcc.org/products/ccl-2"
+    },
+    {
+      "name": "Trehalose",
+      "quantity": "100",
+      "unit": "g",
+      "vendor": "Sigma-Aldrich",
+      "sku": "T9449",
+      "url": "https://www.sigmaaldrich.com"
+    },
+    {
+      "name": "Dimethyl sulfoxide",
+      "quantity": "100",
+      "unit": "mL",
+      "vendor": "Sigma-Aldrich",
+      "sku": "D2650",
+      "url": "https://www.sigmaaldrich.com"
+    },
+    {
+      "name": "Cryovials",
+      "quantity": "1",
+      "unit": "box",
+      "vendor": "Corning",
+      "sku": "430659",
+      "url": "https://www.corning.com"
+    }
+  ],
+  "gaps": [
+    "Exact intracellular trehalose loading method is not specified in the source protocol.",
+    "Secondary recovery assay reagents would need downstream enrichment if not listed here."
+  ]
+}
