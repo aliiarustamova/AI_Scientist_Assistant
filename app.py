@@ -17,6 +17,7 @@ import os
 import sys
 import traceback
 import uuid
+import json
 
 from dotenv import load_dotenv
 
@@ -49,6 +50,55 @@ app = Flask(__name__)
 CORS(app)  # allow cross-origin from the FE dev server / Vercel
 
 
+def _assistant_mode() -> str:
+    """Return assistant mode from env: 'llm' (default) or 'mock'."""
+    mode = os.environ.get("ASSISTANT_MODE", "llm").strip().lower()
+    return "mock" if mode == "mock" else "llm"
+
+
+def _mock_assistant_answer(question: str, context: object) -> str:
+    """Deterministic mock answers for local UI/dev testing with no API calls."""
+    q = question.lower()
+    route = ""
+    if isinstance(context, dict):
+        route = str(context.get("route", "")).strip()
+
+    if "hypothesis" in q or route == "/lab":
+        return (
+            "A good hypothesis is specific and falsifiable. Try this format: "
+            "'If [independent variable] changes in [system], then [dependent variable] "
+            "will change because [mechanism].' Next step: define one measurable readout "
+            "and one control condition."
+        )
+
+    if "novel" in q or "literature" in q or route == "/literature":
+        return (
+            "For novelty, compare your setup against three closest studies: organism, "
+            "intervention range, and readout. If one of those differs materially "
+            "(for example a wider concentration range or different endpoint), "
+            "you likely have a meaningful angle."
+        )
+
+    if "risk" in q or "fail" in q or "wrong" in q:
+        return (
+            "Top experimental risks to check first: measurement saturation, uncontrolled "
+            "baseline drift, and confounded controls. Add one negative control and one "
+            "replicate block before scaling."
+        )
+
+    if "next" in q or "start" in q or "what can i do" in q:
+        return (
+            "Recommended next step: write a structured hypothesis, run a quick literature "
+            "scan, then draft a minimal protocol with materials, controls, and a success metric."
+        )
+
+    return (
+        "Mock mode is active, so no external LLM call was made. I can still help you "
+        "test the full frontend-backend flow. Ask about hypothesis quality, novelty, risks, "
+        "or next experimental steps."
+    )
+
+
 @app.get("/health")
 def health():
     """Liveness ping."""
@@ -58,6 +108,55 @@ def health():
         "stage": "lit_review",
         "model": llm.model_id(),
     })
+
+
+@app.route("/assistant", methods=["POST"])
+def assistant():
+    """Answer assistant questions using the configured LLM provider."""
+    data = request.get_json(silent=True) or {}
+    question = (data.get("question") or "").strip()
+    context = data.get("context")
+
+    if not question:
+        return jsonify({
+            "error": "validation_error",
+            "detail": "Field 'question' is required and must be a non-empty string.",
+        }), 422
+
+    try:
+        context_json = json.dumps(context, ensure_ascii=False, default=str)
+    except Exception:
+        context_json = str(context)
+
+    system_prompt = (
+        "You are Praxis, an AI research assistant for experimental science.\n"
+        "Give concise, practical guidance grounded in the user's context.\n"
+        "If context is incomplete, state assumptions briefly and suggest the best next step.\n"
+        "Avoid fabricating citations, results, or data.\n"
+        "Respond in plain text."
+    )
+    user_prompt = (
+        f"Route context JSON:\n{context_json}\n\n"
+        f"User question:\n{question}"
+    )
+
+    if _assistant_mode() == "mock":
+        return jsonify({
+            "answer": _mock_assistant_answer(question, context),
+            "mode": "mock",
+        })
+
+    try:
+        answer = llm.complete(system_prompt, user_prompt).strip()
+        if not answer:
+            answer = "I could not generate a response. Please try rephrasing your question."
+        return jsonify({"answer": answer, "mode": "llm"})
+    except Exception:
+        traceback.print_exc()
+        return jsonify({
+            "error": "assistant_error",
+            "detail": "Assistant request failed. Check server logs for the underlying cause.",
+        }), 500
 
 
 @app.post("/lit-review")
@@ -150,6 +249,6 @@ if __name__ == "__main__":
     #   gunicorn -b 0.0.0.0:5000 app:app
     # FLASK_DEBUG defaults to "0" so dropping this onto a server doesn't
     # accidentally enable the debugger and reloader.
-    port = int(os.environ.get("PORT", 5000))
+    port = int(os.environ.get("PORT", 8000))
     debug = os.environ.get("FLASK_DEBUG", "0") == "1"
     app.run(host="0.0.0.0", port=port, debug=debug)
