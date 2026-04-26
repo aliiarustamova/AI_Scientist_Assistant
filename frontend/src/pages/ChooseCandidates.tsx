@@ -27,9 +27,14 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import {
   postProtocolCandidates,
+  setActivePlanId,
   type ProtocolCandidate,
   type StructuredHypothesis,
 } from "@/lib/api";
+import {
+  deriveResearchQuestion,
+  setStoredWorkflowStructured,
+} from "@/lib/workflowContext";
 import {
   ArrowRight,
   Check,
@@ -96,6 +101,14 @@ const ChooseCandidates = () => {
   const useMockData = !incomingPlanId && !incomingStructured;
 
   useEffect(() => {
+    if (!incomingStructured) return;
+    const rq = incomingStructured.research_question?.trim()
+      ? incomingStructured.research_question
+      : deriveResearchQuestion(incomingStructured);
+    setStoredWorkflowStructured({ ...incomingStructured, research_question: rq });
+  }, [incomingStructured]);
+
+  useEffect(() => {
     if (useMockData) {
       setLoading(false);
       return;
@@ -128,6 +141,11 @@ const ChooseCandidates = () => {
 
     return () => ac.abort();
   }, [incomingPlanId, incomingStructured, useMockData]);
+
+  useEffect(() => {
+    const id = planId ?? incomingPlanId ?? null;
+    if (id) setActivePlanId(id);
+  }, [planId, incomingPlanId]);
 
   const toggleSelected = (id: string) => {
     setSelectedIds((prev) => {
@@ -273,9 +291,10 @@ const ChooseCandidates = () => {
               No matches
             </p>
             <p className="mt-2 text-[14px] text-ink">
-              protocols.io returned nothing for any of the queries we tried.
-              The synthesis will draw from the assistant's built-in library
-              instead.
+              No protocol on protocols.io cleared the relevance bar for your
+              hypothesis (or the search returned nothing). The assistant will
+              not show unrelated hits. You can still continue — synthesis can use
+              other built-in sources.
             </p>
           </div>
         )}

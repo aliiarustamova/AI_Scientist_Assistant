@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import {
   dispatchChatApplied,
-  getActivePlanId,
+  getChatPlanId,
   postChat,
   postChatApply,
   type ChatMessage,
@@ -21,8 +21,8 @@ import {
 // ----------------------------------------------------------------------------
 // AI Assistant — propose-then-apply chat over the experiment-plan blackboard.
 //
-// On send, we POST /chat with the current plan_id (from sessionStorage —
-// pages register it via setActivePlanId), the route the user is on, and the
+// On send, we POST /chat with the current plan_id (getChatPlanId: active or
+// last-known after a page unmount; see api.ts), the route the user is on, and the
 // conversation history. The backend may return zero or more proposed
 // mutations alongside the assistant's prose reply; we render those as cards
 // with Apply / Reject buttons. Apply round-trips the mutation back to
@@ -144,7 +144,7 @@ export const AIAssistantPanel = ({ open, onOpenChange, route = "/" }: Props) => 
     const trimmed = text.trim();
     if (!trimmed || pending) return;
 
-    const planId = getActivePlanId();
+    const planId = getChatPlanId(route);
     const userMsg: LocalMessage = {
       id: crypto.randomUUID(),
       role: "user",
@@ -207,7 +207,7 @@ export const AIAssistantPanel = ({ open, onOpenChange, route = "/" }: Props) => 
   // applied event so the host page refreshes its sections, then mark it
   // applied locally so the button flips to a check.
   const applyProposal = async (assistantMsgId: string, proposal: ProposedMutation) => {
-    const planId = getActivePlanId();
+    const planId = getChatPlanId(route);
     if (!planId) return;
     try {
       const res = await postChatApply({ plan_id: planId, mutations: [proposal] });

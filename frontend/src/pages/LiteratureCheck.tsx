@@ -9,6 +9,10 @@ import {
   type StructuredHypothesis,
 } from "@/lib/api";
 import {
+  deriveResearchQuestion,
+  setStoredWorkflowStructured,
+} from "@/lib/workflowContext";
+import {
   AlertTriangle,
   ArrowRight,
   Check,
@@ -26,8 +30,13 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 
-// Backend signal values, mirrored on the frontend.
-type NoveltyStatus = "not_found" | "similar_work_exists" | "exact_match";
+// Backend signal values, mirrored on the frontend. "unavailable" = live request
+// failed: we do not show unrelated static demo text next to a real hypothesis.
+type NoveltyStatus =
+  | "not_found"
+  | "similar_work_exists"
+  | "exact_match"
+  | "unavailable";
 type ConfidenceLevel = "low" | "moderate" | "high";
 
 // Mirrors the backend reference object.
@@ -161,7 +170,23 @@ const NOVELTY_COPY: Record<
     pillBg: "bg-destructive/[0.06]",
     pillBorder: "border-destructive/30",
   },
+  unavailable: {
+    dot: "bg-rule",
+    label: "Literature assessment could not be generated",
+    pill: "Unavailable",
+    tone: "text-muted-foreground",
+    pillBg: "bg-paper/80",
+    pillBorder: "border-rule",
+  },
 };
+
+// Shown when POST /lit-review failed but the user has a real hypothesis (never
+// show the unrelated E. coli demo as if it were their result).
+const UNAVAILABLE_DESCRIPTION =
+  "The service did not return a novelty review for your hypothesis. The messages above and below are not a scientific assessment; resolve the error (for example: run the API locally on port 5000, set valid keys in .env, or correct an HTTP 403 from a proxy) and run this step again.";
+
+const UNAVAILABLE_RECOMMENDATION =
+  "After the connection issue is fixed, re-run the literature check from the hypothesis step so results match your own question.";
 
 const CONFIDENCE_COPY: Record<
   ConfidenceLevel,
@@ -171,6 +196,7 @@ const CONFIDENCE_COPY: Record<
   moderate: { label: "Moderate", filled: 2, dots: "●●○" },
   high: { label: "High", filled: 3, dots: "●●●" },
 };
+
 
 const REFERENCES: Reference[] = [
   {
@@ -311,6 +337,14 @@ const LiteratureCheck = () => {
     { structured?: StructuredHypothesis; domain?: string } | null) ?? null;
   const inputHypothesis = navState?.structured;
 
+  useEffect(() => {
+    if (!inputHypothesis) return;
+    const rq = inputHypothesis.research_question?.trim()
+      ? inputHypothesis.research_question
+      : deriveResearchQuestion(inputHypothesis);
+    setStoredWorkflowStructured({ ...inputHypothesis, research_question: rq });
+  }, [inputHypothesis]);
+
   const [stageIdx, setStageIdx] = useState(0);
   const [done, setDone] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -364,17 +398,37 @@ const LiteratureCheck = () => {
     };
   }, [inputHypothesis]);
 
-  // Derived display values: prefer real API data; fall back to mock
-  // constants so design-mockup mode (no hypothesis) still renders.
-  const signalKey = litResult ? mapSignal(litResult.signal) : NOVELTY_SIGNAL;
+  // Real hypothesis from the lab flow: only use static E. coli demo when the
+  // user opened this page *without* state (design preview). If they have a
+  // hypothesis but the API failed, show an explicit "unavailable" state — not
+  // unrelated placeholder papers, which read as their result.
+  const useStaticDemo = !inputHypothesis;
+  const literatureUnavailable = Boolean(
+    inputHypothesis && done && !litResult,
+  );
+
+  const signalKey: NoveltyStatus = litResult
+    ? mapSignal(litResult.signal)
+    : useStaticDemo
+      ? NOVELTY_SIGNAL
+      : "unavailable";
   const status = NOVELTY_COPY[signalKey];
   const confidence = CONFIDENCE_COPY[NOVELTY_CONFIDENCE];
-  const novelDescription = litResult?.description ?? NOVELTY_DESCRIPTION;
-  const recommendationSummary = litResult?.summary ?? RECOMMENDATION_SUMMARY;
+  const novelDescription = litResult
+    ? litResult.description
+    : useStaticDemo
+      ? NOVELTY_DESCRIPTION
+      : UNAVAILABLE_DESCRIPTION;
+  const recommendationSummary = litResult
+    ? litResult.summary
+    : useStaticDemo
+      ? RECOMMENDATION_SUMMARY
+      : UNAVAILABLE_RECOMMENDATION;
   const references: Reference[] = useMemo(() => {
-    if (!litResult) return REFERENCES;
-    return litResult.references.map(citationToReference);
-  }, [litResult]);
+    if (litResult) return litResult.references.map(citationToReference);
+    if (useStaticDemo) return REFERENCES;
+    return [];
+  }, [litResult, useStaticDemo]);
 
   const progressPct = done ? 100 : stageIdx === 0 ? 35 : 75;
 
@@ -446,10 +500,15 @@ const LiteratureCheck = () => {
               <AlertTriangle aria-hidden className="mt-0.5 h-4 w-4 flex-shrink-0 text-destructive" />
               <div className="space-y-1.5">
                 <p className="font-mono-notebook text-[11px] uppercase tracking-[0.22em] text-destructive">
-                  Literature lookup failed — showing demo data
+                  Literature lookup failed
                 </p>
                 <p className="text-[14px] leading-[1.55] text-ink-soft">
                   {apiError}
+                </p>
+                <p className="text-[13px] leading-[1.55] text-ink-soft/90">
+                  Unrelated sample content (E. coli / glucose) is not shown with
+                  your own hypothesis, so you are not misled. Fix the error and
+                  run this step again.
                 </p>
               </div>
             </div>
@@ -651,49 +710,59 @@ const LiteratureCheck = () => {
                   <p className="font-mono-notebook text-[11px] uppercase tracking-[0.22em] text-muted-foreground">
                     Confidence
                   </p>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <button
-                        type="button"
-                        aria-label={`Confidence: ${confidence.label}.`}
-                        className="group/conf inline-flex items-center gap-2.5 rounded-sm px-1.5 py-1 -mx-1.5 transition-colors hover:bg-rule-soft/40 focus:bg-rule-soft/40 focus:outline-none"
-                      >
-                        <span aria-hidden className="flex items-center gap-1.5">
-                          {[0, 1, 2].map((i) => (
-                            <span
-                              key={i}
-                              className={
-                                "h-2 w-2 rounded-full " +
-                                (i < confidence.filled ? "bg-ink" : "bg-rule")
-                              }
-                            />
-                          ))}
-                        </span>
-                        <span
-                          className="text-[16px] italic leading-none text-ink"
-                          style={{ fontFamily: '"Instrument Serif", Georgia, serif' }}
-                        >
-                          {confidence.label}
-                        </span>
-                        <Info
-                          className="h-3.5 w-3.5 text-muted-foreground transition-colors group-hover/conf:text-ink"
-                          strokeWidth={1.75}
-                        />
-                      </button>
-                    </TooltipTrigger>
-                    <TooltipContent
-                      side="left"
-                      align="end"
-                      className="max-w-[260px] rounded-sm border-rule bg-paper-raised px-3.5 py-2.5 text-[13px] leading-[1.5] text-ink-soft shadow-[0_8px_24px_-12px_hsl(var(--ink)/0.35)]"
+                  {literatureUnavailable ? (
+                    <span
+                      className="inline-flex items-center gap-2.5 text-[16px] italic leading-none text-muted-foreground"
+                      style={{ fontFamily: '"Instrument Serif", Georgia, serif' }}
                     >
-                      <p className="font-mono-notebook text-[10px] uppercase tracking-[0.22em] text-muted-foreground">
-                        How we got this
-                      </p>
-                      <p className="mt-1.5">
-                        <span className="font-medium text-ink">{confidence.label}</span> — derived from the similarity of prior protocols, conditions, and measurement endpoints across the indexed corpus.
-                      </p>
-                    </TooltipContent>
-                  </Tooltip>
+                      <span aria-hidden className="text-muted-foreground/70">—</span>
+                      <span>Not estimated</span>
+                    </span>
+                  ) : (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button
+                          type="button"
+                          aria-label={`Confidence: ${confidence.label}.`}
+                          className="group/conf inline-flex items-center gap-2.5 rounded-sm px-1.5 py-1 -mx-1.5 transition-colors hover:bg-rule-soft/40 focus:bg-rule-soft/40 focus:outline-none"
+                        >
+                          <span aria-hidden className="flex items-center gap-1.5">
+                            {[0, 1, 2].map((i) => (
+                              <span
+                                key={i}
+                                className={
+                                  "h-2 w-2 rounded-full " +
+                                  (i < confidence.filled ? "bg-ink" : "bg-rule")
+                                }
+                              />
+                            ))}
+                          </span>
+                          <span
+                            className="text-[16px] italic leading-none text-ink"
+                            style={{ fontFamily: '"Instrument Serif", Georgia, serif' }}
+                          >
+                            {confidence.label}
+                          </span>
+                          <Info
+                            className="h-3.5 w-3.5 text-muted-foreground transition-colors group-hover/conf:text-ink"
+                            strokeWidth={1.75}
+                          />
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent
+                        side="left"
+                        align="end"
+                        className="max-w-[260px] rounded-sm border-rule bg-paper-raised px-3.5 py-2.5 text-[13px] leading-[1.5] text-ink-soft shadow-[0_8px_24px_-12px_hsl(var(--ink)/0.35)]"
+                      >
+                        <p className="font-mono-notebook text-[10px] uppercase tracking-[0.22em] text-muted-foreground">
+                          How we got this
+                        </p>
+                        <p className="mt-1.5">
+                          <span className="font-medium text-ink">{confidence.label}</span> — derived from the similarity of prior protocols, conditions, and measurement endpoints across the indexed corpus.
+                        </p>
+                      </TooltipContent>
+                    </Tooltip>
+                  )}
                 </div>
               </div>
             </section>
@@ -730,7 +799,9 @@ const LiteratureCheck = () => {
                   Supporting papers
                 </h2>
                 <p className="font-mono-notebook text-[12px] uppercase tracking-[0.2em] text-muted-foreground">
-                  {references.length} found · ranked by relevance
+                  {references.length === 0 && !useStaticDemo
+                    ? "None loaded — see error above"
+                    : `${references.length} found · ranked by relevance`}
                 </p>
               </div>
 
@@ -763,7 +834,15 @@ const LiteratureCheck = () => {
                 </div>
               )}
 
-              <ol className="overflow-hidden rounded-md border border-rule bg-paper-raised">
+              {references.length === 0 && !useStaticDemo ? (
+                <p
+                  className="rounded-md border border-dashed border-rule bg-paper-raised px-7 py-8 text-[15px] leading-[1.65] text-ink-soft"
+                >
+                  No supporting papers to display until the literature service
+                  returns results.
+                </p>
+              ) : (
+                <ol className="overflow-hidden rounded-md border border-rule bg-paper-raised">
                 {references.map((p, i) => {
                   const isOpen = expandedId === p.id;
                   const pct = Math.round(p.relevance_score * 100);
@@ -960,6 +1039,7 @@ const LiteratureCheck = () => {
                   );
                 })}
               </ol>
+              )}
             </section>
 
             {/* Key differences. Phase E: when the BE shipped real
@@ -1086,7 +1166,7 @@ const LiteratureCheck = () => {
                       );
                     })}
                 </ol>
-              ) : (
+              ) : useStaticDemo ? (
                 <ol className="divide-y divide-rule">
                   {KEY_DIFFERENCES.map((d, i) => (
                     <li key={i} className="px-7 py-5">
@@ -1116,6 +1196,11 @@ const LiteratureCheck = () => {
                     </li>
                   ))}
                 </ol>
+              ) : (
+                <p className="px-7 py-6 text-[15px] leading-[1.65] text-ink-soft">
+                  No comparison is available until the literature check completes
+                  successfully.
+                </p>
               )}
             </section>
 

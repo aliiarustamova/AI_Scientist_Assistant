@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import {
   ArrowRight,
   Check,
@@ -12,13 +12,19 @@ import {
   Star,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-
-const HYPOTHESIS_SUMMARY =
-  "Increasing glucose concentration in M9 minimal media reduces the specific growth rate of E. coli K-12 above 10 mM, due to catabolite repression under aerobic conditions at 37 °C.";
+import type { ReviewRefineSnapshot } from "@/lib/buildReviewSnapshot";
+import { REVIEW_SNAPSHOT_KEY } from "@/lib/buildReviewSnapshot";
+import { composeHypothesisQuestion } from "@/lib/hypothesis";
+import { getWorkflowPlanId } from "@/lib/api";
+import { getStoredWorkflowStructured } from "@/lib/workflowContext";
 
 type SectionKey = "protocol" | "materials" | "budget" | "timeline";
 
-const SECTIONS: Array<{
+const FALLBACK_HYPOTHESIS =
+  "Increasing glucose concentration in M9 minimal media reduces the specific growth rate of E. coli K-12 above 10 mM, due to catabolite repression under aerobic conditions at 37 °C.";
+
+/** Design demo only — used when no plan snapshot is available. */
+const FALLBACK_SECTIONS: Array<{
   key: SectionKey;
   label: string;
   meta: string;
@@ -113,8 +119,51 @@ const EDITABLE: Array<{ key: string; label: string; placeholder: string }> = [
   },
 ];
 
+function readSnapshotFromSession(): ReviewRefineSnapshot | null {
+  try {
+    const raw = sessionStorage.getItem(REVIEW_SNAPSHOT_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw) as ReviewRefineSnapshot;
+  } catch {
+    return null;
+  }
+}
+
 const ReviewRefine = () => {
   const navigate = useNavigate();
+  const location = useLocation();
+  const fromNav = (
+    location.state as { snapshot?: ReviewRefineSnapshot } | null
+  )?.snapshot;
+
+  const [snapshot, setSnapshot] = useState<ReviewRefineSnapshot | null>(() => {
+    return fromNav ?? readSnapshotFromSession();
+  });
+
+  useEffect(() => {
+    if (fromNav) {
+      setSnapshot(fromNav);
+      try {
+        sessionStorage.setItem(REVIEW_SNAPSHOT_KEY, JSON.stringify(fromNav));
+      } catch {
+        /* ignore */
+      }
+    }
+  }, [fromNav]);
+
+  const hypothesisDisplay = useMemo(() => {
+    if (snapshot?.hypothesisText?.trim()) return snapshot.hypothesisText;
+    const stored = getStoredWorkflowStructured();
+    if (stored) {
+      return (
+        stored.research_question?.trim() || composeHypothesisQuestion(stored)
+      );
+    }
+    return FALLBACK_HYPOTHESIS;
+  }, [snapshot]);
+
+  const displaySections = snapshot?.sections ?? FALLBACK_SECTIONS;
+  const usingLiveSnapshot = Boolean(snapshot?.sections?.length);
   const [expanded, setExpanded] = useState<Record<SectionKey, boolean>>({
     protocol: false,
     materials: false,
@@ -232,7 +281,7 @@ const ReviewRefine = () => {
                 Your hypothesis
               </p>
               <Link
-                to="/"
+                to="/lab"
                 className="inline-flex items-center gap-1.5 font-mono-notebook text-[12px] uppercase tracking-[0.18em] text-ink-soft transition-colors hover:text-primary"
               >
                 <Pencil className="h-3 w-3" strokeWidth={1.75} />
@@ -243,7 +292,7 @@ const ReviewRefine = () => {
               className="px-6 py-5 text-[20px] leading-[1.55] text-ink"
               style={{ fontFamily: '"Instrument Serif", Georgia, serif' }}
             >
-              {HYPOTHESIS_SUMMARY}
+              {hypothesisDisplay}
             </p>
           </div>
         </section>
@@ -258,12 +307,14 @@ const ReviewRefine = () => {
               Plan overview
             </h2>
             <p className="font-mono-notebook text-[12px] uppercase tracking-[0.2em] text-muted-foreground">
-              Compact summary · expand to inspect
+              {usingLiveSnapshot
+                ? "From your last plan on the previous step · expand to inspect"
+                : "Demo content — open from the plan step to load your run"}
             </p>
           </header>
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            {SECTIONS.map((s) => {
+            {displaySections.map((s) => {
               const isOpen = expanded[s.key];
               return (
                 <article
@@ -590,20 +641,10 @@ const ReviewRefine = () => {
                 <ArrowRight className="h-4 w-4 rotate-180 transition-transform group-hover:-translate-x-0.5" strokeWidth={1.75} />
                 Back to plan
               </button>
-              {/* Download button — only render when there's an active
-                  plan in sessionStorage. After a hard-refresh, router
-                  state is gone and there's no plan_id to send to the
-                  BE; showing a button that errors on click is worse
-                  than hiding it. The chat panel uses the same
-                  getActivePlanId() check (read inline here to avoid
-                  circular import noise). */}
+              {/* Download when we know a plan id (active or last-known; after
+                  a hard-refresh on /review, both may be empty). */}
               {(() => {
-                let activePlanId: string | null = null;
-                try {
-                  activePlanId = window.sessionStorage.getItem("praxis:active_plan_id");
-                } catch {
-                  activePlanId = null;
-                }
+                const activePlanId = getWorkflowPlanId();
                 if (!activePlanId) return null;
                 return (
                   <>

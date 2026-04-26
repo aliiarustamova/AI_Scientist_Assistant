@@ -14,6 +14,7 @@ import Library from "./pages/Library.tsx";
 import Account from "./pages/Account.tsx";
 import NotFound from "./pages/NotFound.tsx";
 import { AIAssistantLauncher } from "./components/AIAssistantLauncher.tsx";
+import { WorkflowStepMenu } from "./components/WorkflowStepMenu.tsx";
 
 const queryClient = new QueryClient();
 
@@ -23,6 +24,7 @@ const App = () => (
       <Toaster />
       <Sonner />
       <BrowserRouter>
+        <WorkflowStepMenu />
         <Routes>
           <Route path="/" element={<Index />} />
           <Route path="/lab" element={<HypothesisInput />} />

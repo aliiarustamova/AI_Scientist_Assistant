@@ -21,6 +21,14 @@ import {
 } from "@/lib/api";
 import { composeHypothesisQuestion } from "@/lib/hypothesis";
 import {
+  buildReviewSnapshot,
+  REVIEW_SNAPSHOT_KEY,
+} from "@/lib/buildReviewSnapshot";
+import {
+  deriveResearchQuestion,
+  setStoredWorkflowStructured,
+} from "@/lib/workflowContext";
+import {
   AlertTriangle,
   ArrowRight,
   Beaker,
@@ -916,6 +924,14 @@ const ExperimentPlan = () => {
   const incomingStructured = navState?.structured;
   const incomingSelectedIds = navState?.selected_protocol_ids;
   const incomingNotes = navState?.researcher_notes;
+
+  useEffect(() => {
+    if (!incomingStructured) return;
+    const rq = incomingStructured.research_question?.trim()
+      ? incomingStructured.research_question
+      : deriveResearchQuestion(incomingStructured);
+    setStoredWorkflowStructured({ ...incomingStructured, research_question: rq });
+  }, [incomingStructured]);
 
   // Section reveal index: 0 nothing, 1 protocol, 2 + materials, 3 + budget+timeline, 4 + validation+feasibility.
   // Real-API path advances reveal as each backend call resolves; mock path
@@ -2813,7 +2829,24 @@ const ExperimentPlan = () => {
                 </p>
               </div>
               <Button
-                onClick={() => navigate("/review")}
+                onClick={() => {
+                  const snap = buildReviewSnapshot({
+                    structured: incomingStructured,
+                    protocolView: apiProtocolView,
+                    materialsView: apiMaterialsView,
+                    timeline: apiTimeline,
+                    realBudget,
+                  });
+                  try {
+                    sessionStorage.setItem(
+                      REVIEW_SNAPSHOT_KEY,
+                      JSON.stringify(snap),
+                    );
+                  } catch {
+                    /* private mode */
+                  }
+                  navigate("/review", { state: { snapshot: snap } });
+                }}
                 className="group h-14 gap-3 rounded-sm bg-ink px-7 text-[15px] font-medium text-paper shadow-[0_8px_24px_-12px_hsl(var(--ink)/0.6)] transition-all hover:bg-ink/90 hover:shadow-[0_10px_28px_-10px_hsl(var(--ink)/0.7)]"
               >
                 <span className="font-mono-notebook text-[10px] uppercase tracking-[0.24em] opacity-70">

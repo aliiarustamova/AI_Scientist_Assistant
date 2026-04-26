@@ -38,12 +38,13 @@ from src.types import (
     StageStatusComplete,
     StageStatusFailed,
     StageStatusRunning,
+    StructuredHypothesis,
     now,
 )
 
 from .architect import ProtocolOutline, plan_outline
 from .materials import roll_up_materials
-from .relevance import filter_relevant, score_protocols
+from .relevance import ScoredProtocol, filter_relevant, score_protocols
 from .sources import (
     NormalizedProtocol,
     ProtocolCandidate,
@@ -136,6 +137,8 @@ Strategy:
 
 Each query is 1-3 words MAX. Single words preferred. Avoid acronyms specific to one paper (e.g., not "LGG", use "Lactobacillus").
 
+CRITICAL: Do NOT output a line that is ONLY a rare chemical/assay abbreviation (2-4 ALL-CAPS letters like DCIP, BCA, TMB, AEBSF). These match random protocols. Prefer a technique or enzyme class: "enzyme assay", "dehydrogenase", "spectrophotometry", "colorimetric", "mitochondrial", or a spelled-out reagent. If the hypothesis centers on a small molecule, also suggest the common name ("succinate") not an obscure readout tag.
+
 Examples:
 - HeLa cryopreservation with trehalose vs DMSO →
     trehalose
@@ -153,13 +156,101 @@ Examples:
 Output ONLY the queries, ONE PER LINE, no numbering, no explanation, no quotes."""
 
 
-def _query_for_hypothesis(hypothesis: Hypothesis) -> list[str]:
-    """LLM-driven query extraction for protocols.io. Returns a list of 1-3
-    candidate queries, ranked from most-likely-to-match (broad concept)
-    to most-specific. Caller tries them in order.
+# Short all-caps tokens (2-4 letters) are weak protocols.io keys — they match
+# unrelated full-text noise. Slightly longer common assay tags (e.g. ELISA) are kept.
+_NARROW_ABBREV_ONLY = re.compile(r"^[A-Z]{2,4}$")
+_MIN_CANDIDATE_RELEVANCE = 0.16
 
-    Falls back to the structured.subject field's first word if the LLM
-    call fails — better than nothing."""
+
+def _is_narrow_abbrev_only(q: str) -> bool:
+    t = (q or "").strip()
+    if not t or " " in t:
+        return False
+    if t in {"RNA", "DNA", "GFP"}:
+        return False
+    if _NARROW_ABBREV_ONLY.match(t):
+        return True
+    return False
+
+
+def _heuristic_protocol_queries(s: StructuredHypothesis) -> list[str]:
+    """Broad search keys from structured fields. Listed before LLM output."""
+    parts = [
+        s.research_question or "",
+        s.subject or "",
+        s.independent or "",
+        s.dependent or "",
+        s.conditions or "",
+        s.expected or "",
+    ]
+    blob = " ".join(parts).lower()
+    out: list[str] = []
+    if any(
+        w in blob
+        for w in (
+            "enzyme",
+            "dehydrogenase",
+            " sdh",
+            "sdh",
+            "substrate",
+            "dcip",
+            "succinate",
+        )
+    ):
+        out.append("enzyme assay")
+    if "dehydrogenase" in blob or "sdh" in blob or " succinate" in blob:
+        if "dehydrogenase" not in " ".join(out):
+            out.append("dehydrogenase")
+    if "succinate" in blob:
+        out.append("succinate")
+    if any(
+        w in blob
+        for w in (
+            "spectrophotom",
+            "absorbance",
+            "colorimetric",
+            "wavelength",
+            "dcip",
+        )
+    ):
+        out.append("spectrophotometry")
+    if "mitochondri" in blob:
+        out.append("mitochondrial")
+    return list(dict.fromkeys([x for x in out if x]))
+
+
+def _merge_ranked_queries(
+    llm_lines: list[str],
+    structured: StructuredHypothesis,
+) -> list[str]:
+    """Heuristics first, then LLM lines; drop junk abbreviations; dedupe."""
+    seen: set[str] = set()
+    ordered: list[str] = []
+
+    def push(q: str) -> None:
+        t = (q or "").strip()
+        if not t or len(t) < 2 or len(t) > 60:
+            return
+        if _is_narrow_abbrev_only(t):
+            return
+        key = t.lower()
+        if key in seen:
+            return
+        seen.add(key)
+        ordered.append(t)
+
+    for h in _heuristic_protocol_queries(structured):
+        push(h)
+    for line in llm_lines:
+        if not _is_narrow_abbrev_only(line):
+            push(line)
+    return ordered[:6]
+
+
+def _query_for_hypothesis(hypothesis: Hypothesis) -> list[str]:
+    """LLM-driven query extraction for protocols.io, merged with
+    deterministic broad queries. Caller tries them in order until a useful
+    hit is found (see fetch_candidates_for_hypothesis)."""
     s = hypothesis.structured
     user = (
         f"Subject: {s.subject}\n"
@@ -168,24 +259,20 @@ def _query_for_hypothesis(hypothesis: Hypothesis) -> list[str]:
         f"Conditions: {s.conditions}\n"
         f"Expected: {s.expected}"
     )
+    lines: list[str] = []
     try:
         from src.clients import llm
         raw = llm.complete(_QUERY_SYSTEM, user).strip()
-        # Parse one-per-line, drop blanks, strip wrapping quotes / bullets.
-        lines: list[str] = []
         for line in raw.splitlines():
             t = line.strip().strip('"').strip("'").lstrip("•-*0123456789.) ").strip()
             if t and 1 <= len(t) <= 60:
                 lines.append(t)
-        if lines:
-            return lines[:3]
     except Exception:
         pass
-    # Fallback: subject's first word (single concept).
-    subject = (s.subject or "").strip()
-    if subject:
-        return [subject.split()[0]]
-    return ["protocol"]
+    merged = _merge_ranked_queries(lines, s)
+    if merged:
+        return merged
+    return ["enzyme assay"]
 
 
 def _sum_iso8601_durations(durations: list[Optional[str]]) -> Optional[str]:
@@ -234,38 +321,33 @@ def fetch_candidates_for_hypothesis(
     limit: int = 5,
 ) -> tuple[list[ProtocolCandidate], list[str], Optional[str]]:
     """Fetch protocols.io candidates for the FE selection screen and
-    score them with the relevance filter so the user sees a useful
-    pick-list. Returns (candidates, queries_tried, query_used).
-
-    Tries the LLM-extracted ranked queries broad-to-specific until one
-    returns hits; `query_used` is None when nothing worked. The
-    candidates are ranked by relevance score descending — researchers
-    can use the score + reason to decide which to keep."""
+    score them with the relevance filter. Tries several ranked search
+    queries in order. Returns the first batch where the best preview
+    clears ``_MIN_CANDIDATE_RELEVANCE``. If every query only yields
+    off-target protocols (below that bar), returns an empty list so the
+    UI does not surface misleading 0%-relevance cards from a bad key
+    such as "DCIP". `query_used` is None when no list is returned."""
     queries = _query_for_hypothesis(hypothesis)
     queries_tried: list[str] = []
-    found: dict[str, NormalizedProtocol] = {}
-    query_used: Optional[str] = None
     for q in queries:
         queries_tried.append(q)
         live = fetch_live_candidates(q, limit=limit)
-        if live:
-            found = live
-            query_used = q
-            break
+        if not live:
+            continue
+        scored = score_protocols(hypothesis, list(live.values()))
+        max_score = max(sp.score.score for sp in scored) if scored else 0.0
+        if max_score >= _MIN_CANDIDATE_RELEVANCE:
+            candidates = _scored_to_candidates(scored)
+            candidates.sort(key=lambda c: c.relevance_score, reverse=True)
+            return candidates, queries_tried, q
+    return [], queries_tried, None
 
-    if not found:
-        return [], queries_tried, None
 
-    # Score them with the relevance filter so we can sort + show reasons.
-    # NOTE: score_protocols (NOT filter_relevant) — we want EVERY
-    # candidate scored, even low-scoring ones. The user picks; we don't
-    # silently drop options.
-    scored = score_protocols(hypothesis, list(found.values()))
-
-    candidates: list[ProtocolCandidate] = []
+def _scored_to_candidates(scored: list[ScoredProtocol]) -> list[ProtocolCandidate]:
+    out: list[ProtocolCandidate] = []
     for sp in scored:
         p = sp.protocol
-        candidates.append(ProtocolCandidate(
+        out.append(ProtocolCandidate(
             id=p.id,
             title=p.title,
             description=p.description,
@@ -276,10 +358,7 @@ def fetch_candidates_for_hypothesis(
             relevance_score=round(sp.score.score, 2),
             relevance_reason=sp.score.reason,
         ))
-
-    # Sort by relevance descending; ties keep API order.
-    candidates.sort(key=lambda c: c.relevance_score, reverse=True)
-    return candidates, queries_tried, query_used
+    return out
 
 
 def run_protocol_only(

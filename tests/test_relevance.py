@@ -156,7 +156,19 @@ def test_live_trehalose_top_hit_scored_below_perfect():
     from protocol_pipeline.sources import load_sample
     norm = load_sample("trehalose")
     assert norm is not None
-    [scored] = score_protocols(_hyp(), [norm])
+    try:
+        scored_list = score_protocols(_hyp(), [norm])
+    except Exception as exc:
+        t = type(exc).__name__
+        # Network / proxy / API outages (e.g. sandbox, 403) should not
+        # fail the whole test run.
+        if any(
+            s in t
+            for s in ("Connection", "Timeout", "Proxy", "HTTP")
+        ) or "403" in str(exc):
+            pytest.skip(f"LLM unavailable for live relevance test: {exc!r}")
+        raise
+    [scored] = scored_list
     assert 0.0 <= scored.score.score <= 0.8, (
         f"Top hit (C. elegans cryo) scored {scored.score.score} for HeLa "
         f"hypothesis — agent should not rate this as a perfect match. "

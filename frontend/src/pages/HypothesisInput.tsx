@@ -1,9 +1,14 @@
-import { useMemo, useState, type KeyboardEvent } from "react";
+import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { ArrowRight, FlaskConical, Pencil, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { mockParseHypothesis } from "@/lib/hypothesisParse";
+import {
+  deriveResearchQuestion,
+  setStoredWorkflowStructured,
+} from "@/lib/workflowContext";
 
 type StructuredHypothesis = {
   subject: string;
@@ -29,7 +34,7 @@ const PLACEHOLDERS: StructuredHypothesis = {
   expected: "e.g. Inverse, saturating relationship above 10 mM",
 };
 
-const PLACEHOLDER_PROMPT = `We hypothesize that increasing glucose concentration in M9 minimal media will reduce the specific growth rate of E. coli K-12 above 10 mM, due to catabolite repression of alternative carbon utilization pathways under aerobic conditions at 37 °C.`;
+const PLACEHOLDER_PROMPT = `Type your testable scientific hypothesis here: a clear, falsifiable claim describing the expected relationship between your variables, the system or context under study, and the conditions in which the prediction is to be evaluated.`;
 
 const FIELD_LABELS: Array<{ key: keyof StructuredHypothesis; label: string; hint: string }> = [
   { key: "subject", label: "Subject", hint: "Organism, system, or material under study" },
@@ -38,41 +43,6 @@ const FIELD_LABELS: Array<{ key: keyof StructuredHypothesis; label: string; hint
   { key: "conditions", label: "Conditions", hint: "Environment held constant" },
   { key: "expected", label: "Expected outcome", hint: "Predicted direction or magnitude" },
 ];
-
-/**
- * Mock parser. Step 1 only — no LLM. Pulls obvious fragments out of the prose
- * so the right panel feels alive when the user clicks "Parse".
- */
-function mockParse(text: string): StructuredHypothesis {
-  const t = text.trim();
-  if (!t) return EMPTY;
-
-  const lower = t.toLowerCase();
-  const grab = (re: RegExp) => {
-    const m = t.match(re);
-    return m ? m[1].trim().replace(/[.,;]+$/, "") : "";
-  };
-
-  const subject = grab(/(?:of|in|on)\s+([A-Z][\w.\- ]+?(?:\s+[A-Z0-9][\w.\-]*)*)/);
-  const independent = grab(/(?:increasing|decreasing|varying|changing)\s+([\w\s\-()]+?)(?:\s+(?:will|on|in|for|reduces?|increases?))/i);
-  const dependent = grab(/(?:reduce|increase|affect|change)s?\s+(?:the\s+)?([\w\s\-()]+?)(?:\s+(?:of|above|below|when|under|due))/i);
-  const conditions = grab(/(?:under|at|in)\s+([\w\-,°.\s]+?(?:conditions?|media|°\s?C|environment))/i);
-  const expected = lower.includes("inverse")
-    ? "Inverse relationship between the two variables"
-    : lower.includes("increase")
-      ? "Positive correlation expected"
-      : lower.includes("reduce") || lower.includes("decrease")
-        ? "Negative correlation expected"
-        : "";
-
-  return {
-    subject: subject || "",
-    independent: independent || "",
-    dependent: dependent || "",
-    conditions: conditions || "",
-    expected,
-  };
-}
 
 function todayLabel() {
   return new Date().toLocaleDateString(undefined, {
@@ -98,8 +68,16 @@ const HypothesisInput = () => {
     [structured],
   );
 
+  useEffect(() => {
+    if (!hasStructure) return;
+    setStoredWorkflowStructured({
+      ...structured,
+      research_question: deriveResearchQuestion(structured),
+    });
+  }, [structured, hasStructure]);
+
   const handleParse = () => {
-    setStructured(mockParse(prose));
+    setStructured(mockParseHypothesis(prose));
     setParsed(true);
   };
 
@@ -462,15 +440,12 @@ const HypothesisInput = () => {
                 // field this form doesn't collect — derive a sensible default
                 // ("Does X affect Y in Z under conditions?") rather than
                 // adding another input.
-                const research_question =
-                  `Does ${structured.independent || "the intervention"} affect ` +
-                  `${structured.dependent || "the outcome"} in ` +
-                  `${structured.subject || "the system"}` +
-                  (structured.conditions ? ` under ${structured.conditions}` : "") +
-                  "?";
+                const research_question = deriveResearchQuestion(structured);
+                const full = { ...structured, research_question };
+                setStoredWorkflowStructured(full);
                 navigate("/literature", {
                   state: {
-                    structured: { ...structured, research_question },
+                    structured: full,
                     domain: undefined,
                   },
                 });

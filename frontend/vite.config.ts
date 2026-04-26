@@ -1,10 +1,17 @@
-import { defineConfig } from "vite";
+import { defineConfig, loadEnv } from "vite";
 import react from "@vitejs/plugin-react-swc";
 import path from "path";
 import { componentTagger } from "lovable-tagger";
 
 // https://vitejs.dev/config/
-export default defineConfig(({ mode }) => ({
+export default defineConfig(({ mode }) => {
+  // Repo root .env: set VITE_DEV_BACKEND to match `PORT=... python3 app.py` (e.g. http://127.0.0.1:8000). Flask’s default is 5000 if PORT is unset.
+  const env = loadEnv(mode, path.resolve(__dirname, ".."), "");
+  const devBackend =
+    (env.VITE_DEV_BACKEND && env.VITE_DEV_BACKEND.trim()) ||
+    "http://127.0.0.1:8000";
+
+  return {
   server: {
     host: "::",
     port: 8080,
@@ -15,16 +22,16 @@ export default defineConfig(({ mode }) => ({
     // as if they were same-origin. In production these are expected to live
     // behind a reverse proxy or under the same origin as the Flask app.
     proxy: {
-      "/lit-review":          "http://localhost:5000",
-      "/protocol":            "http://localhost:5000",
-      "/protocol/pdf":        "http://localhost:5000",
-      "/protocol-candidates": "http://localhost:5000",
-      "/materials":           "http://localhost:5000",
-      "/timeline":            "http://localhost:5000",
-      "/validation":          "http://localhost:5000",
-      "/critique":            "http://localhost:5000",
-      "/chat":                "http://localhost:5000",
-      "/health":              "http://localhost:5000",
+      "/lit-review":          devBackend,
+      "/protocol":            devBackend,
+      "/protocol/pdf":        devBackend,
+      "/protocol-candidates": devBackend,
+      "/materials":           devBackend,
+      "/timeline":            devBackend,
+      "/validation":          devBackend,
+      "/critique":            devBackend,
+      "/chat":                devBackend,
+      "/health":              devBackend,
     },
   },
   plugins: [react(), mode === "development" && componentTagger()].filter(Boolean),
@@ -34,4 +41,5 @@ export default defineConfig(({ mode }) => ({
     },
     dedupe: ["react", "react-dom", "react/jsx-runtime", "react/jsx-dev-runtime", "@tanstack/react-query", "@tanstack/query-core"],
   },
-}));
+  };
+});

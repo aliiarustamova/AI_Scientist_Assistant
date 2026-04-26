@@ -558,11 +558,18 @@ export function dispatchChatApplied(detail: ChatAppliedEventDetail): void {
 // across in-app navigation but clears when the tab closes — sane scope.
 
 const ACTIVE_PLAN_KEY = "praxis:active_plan_id";
+// Persists the most recent plan id even when a page unmount clears "active"
+// (e.g. Plan → Review). The AI panel and workflow nav use this as fallback.
+const LAST_PLAN_KEY = "praxis:last_plan_id";
 
 export function setActivePlanId(planId: string | null): void {
   try {
-    if (planId) sessionStorage.setItem(ACTIVE_PLAN_KEY, planId);
-    else sessionStorage.removeItem(ACTIVE_PLAN_KEY);
+    if (planId) {
+      sessionStorage.setItem(ACTIVE_PLAN_KEY, planId);
+      sessionStorage.setItem(LAST_PLAN_KEY, planId);
+    } else {
+      sessionStorage.removeItem(ACTIVE_PLAN_KEY);
+    }
   } catch {
     // sessionStorage can throw in some private-browsing modes; ignore.
   }
@@ -574,4 +581,30 @@ export function getActivePlanId(): string | null {
   } catch {
     return null;
   }
+}
+
+export function getLastKnownPlanId(): string | null {
+  try {
+    return sessionStorage.getItem(LAST_PLAN_KEY);
+  } catch {
+    return null;
+  }
+}
+
+/** Active plan, or most recently active — for workflow / chat after a page unmount. */
+export function getWorkflowPlanId(): string | null {
+  return getActivePlanId() ?? getLastKnownPlanId();
+}
+
+/**
+ * Plan id to send to /chat. On `/` and `/lab` only the active (page-registered) id
+ * is used so a stale "last" plan from an earlier run does not attach to a fresh
+ * hypothesis session. Everywhere else, last-known is used if active was cleared.
+ */
+export function getChatPlanId(route: string): string | null {
+  const p = (route || "/").split("?")[0] || "/";
+  if (p === "/" || p === "/lab") {
+    return getActivePlanId();
+  }
+  return getWorkflowPlanId();
 }
