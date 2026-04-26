@@ -37,7 +37,7 @@ load_dotenv()
 from src.clients import llm, tavily  # noqa: E402
 from src.lib import plan as plan_lib  # noqa: E402
 from lit_review_pipeline import stage as lit_review  # noqa: E402
-from src.types import (  # noqa: E402
+from src.schema import (  # noqa: E402
     Hypothesis,
     StageStatusComplete,
     StageStatusFailed,

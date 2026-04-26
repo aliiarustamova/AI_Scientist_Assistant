@@ -154,30 +154,51 @@ export const AIAssistantPanel = ({ open, onOpenChange, route = "/" }: Props) => 
     }
   }, [messages, pending]);
 
-  const send = (text: string) => {
-    const trimmed = text.trim();
-    if (!trimmed || pending) return;
-    const userMsg: Message = {
-      id: crypto.randomUUID(),
-      role: "user",
-      content: trimmed,
-    };
-    setMessages((m) => [...m, userMsg]);
-    setInput("");
-    setPending(true);
-    window.setTimeout(() => {
-      setMessages((m) => [
-        ...m,
-        {
-          id: crypto.randomUUID(),
-          role: "assistant",
-          content: matchResponse(trimmed, route),
-        },
-      ]);
-      setPending(false);
-    }, 900);
+const send = async (text: string) => {
+  const trimmed = text.trim();
+  if (!trimmed || pending) return;
+
+  const userMsg: Message = {
+    id: crypto.randomUUID(),
+    role: "user",
+    content: trimmed,
   };
 
+  // show user message immediately
+  setMessages((prev) => [...prev, userMsg]);
+  setInput("");
+  setPending(true);
+
+  try {
+    const res = await fetch("http://127.0.0.1:8000/generate", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ prompt: trimmed }),
+    });
+
+    const data = await res.json();
+
+    const aiMsg: Message = {
+      id: crypto.randomUUID(),
+      role: "assistant",
+      content: data.response,
+    };
+
+    setMessages((prev) => [...prev, aiMsg]);
+  } catch (err) {
+    const errorMsg: Message = {
+      id: crypto.randomUUID(),
+      role: "assistant",
+      content: "Error talking to backend",
+    };
+
+    setMessages((prev) => [...prev, errorMsg]);
+  }
+
+  setPending(false);
+};
   const handleSuggestion = (s: string) => {
     setInput(s);
     inputRef.current?.focus();

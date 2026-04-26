@@ -1,9 +1,15 @@
+from dotenv import load_dotenv
+load_dotenv()
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+from src.clients.llm import complete
+
 app = FastAPI()
 
+# allow frontend to talk to backend
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -14,7 +20,8 @@ app.add_middleware(
 
 @app.get("/")
 def root():
-    return {"message": "API is running!!!"}
+    return {"message": "API is running"}
+
 
 class PromptRequest(BaseModel):
     prompt: str
@@ -22,4 +29,8 @@ class PromptRequest(BaseModel):
 
 @app.post("/generate")
 def generate(req: PromptRequest):
-    return {"response": f"AI says: {req.prompt}"}
+    result = complete(
+        system="You are a helpful scientific AI assistant.",
+        user=req.prompt
+    )
+    return {"response": result}

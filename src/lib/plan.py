@@ -11,7 +11,7 @@ import tempfile
 import uuid
 from pathlib import Path
 
-from src.types import (
+from src.schema import (
     ALL_STAGES,
     ExperimentPlan,
     ExperimentPlanMeta,
