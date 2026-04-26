@@ -66,16 +66,17 @@ class StageResult:
 # Public entry points
 # --------------------------------------------------------------------------
 
-def run(
+def run_protocol_only(
     hypothesis: Hypothesis,
     *,
     sources: list[NormalizedProtocol] | None = None,
     relevance_threshold: float = 0.2,
     max_writer_workers: int = 5,
-) -> StageResult:
-    """Run the full Stage 2 + 3 pipeline against an in-memory list of
-    normalized source protocols. Pass `sources=None` to load all the
-    static samples in `pipeline_output_samples/protocols_io/`."""
+) -> tuple[ProtocolGenerationOutput, ProtocolOutline]:
+    """Run Stage 2 only: relevance + architect + writers. Skips materials
+    roll-up so the FE can render the protocol as soon as it's ready and
+    fetch materials in a separate request. Returns the protocol output
+    and the intermediate outline (kept for debugging / sample dumps)."""
     if sources is None:
         sources = list(load_all_samples().values())
 
@@ -127,10 +128,33 @@ def run(
         total_steps=len(flat_steps),
         source_protocol_ids=sorted(referenced_ids),
     )
+    return protocol, outline
 
-    # 6. Materials roll-up
-    materials = roll_up_materials(procedures)
 
+def run_materials_only(protocol: ProtocolGenerationOutput) -> MaterialsOutput:
+    """Run Stage 3 only: materials roll-up over an existing
+    ProtocolGenerationOutput. Cheap (one LLM call) — designed for a
+    /materials endpoint that chains off a previously-saved protocol
+    rather than re-running Stage 2."""
+    return roll_up_materials(protocol.procedures)
+
+
+def run(
+    hypothesis: Hypothesis,
+    *,
+    sources: list[NormalizedProtocol] | None = None,
+    relevance_threshold: float = 0.2,
+    max_writer_workers: int = 5,
+) -> StageResult:
+    """Run the full Stage 2 + 3 pipeline (protocol + materials together).
+    Use `run_protocol_only` / `run_materials_only` for the split flow."""
+    protocol, outline = run_protocol_only(
+        hypothesis,
+        sources=sources,
+        relevance_threshold=relevance_threshold,
+        max_writer_workers=max_writer_workers,
+    )
+    materials = run_materials_only(protocol)
     return StageResult(protocol=protocol, materials=materials, outline=outline)
 
 
