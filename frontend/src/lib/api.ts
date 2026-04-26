@@ -170,6 +170,147 @@ export type MaterialsResponse = {
   raw: unknown;
 };
 
+// ----- /timeline response (Stage 5) ---------------------------------------
+// Deterministic compute — no LLM call. Each phase carries `methodology`
+// (plain-English description of how its duration was computed) and
+// `coverage` (fraction of steps with duration data) so the FE can show
+// audit-friendly chips. `total_duration` is null when ANY phase had
+// incomplete data — conservative-by-design.
+
+export type TimelineTask = {
+  step_n: number;
+  name: string;
+  duration?: string;          // ISO 8601, null when step has no duration
+  hands_on_time?: string;
+  can_parallel: boolean;
+};
+
+export type TimelinePhase = {
+  id: string;                 // "phase-{procedure_index}"
+  name: string;
+  duration?: string;          // null when ANY task duration is missing
+  tasks: TimelineTask[];
+  depends_on: string[];
+  parallel_with: string[];
+  procedure_index: number;
+  coverage: number;           // 0..1
+  methodology: string;
+};
+
+export type TimelineOutput = {
+  phases: TimelinePhase[];
+  total_duration?: string;    // null when ANY phase is missing
+  critical_path: string[];    // phase IDs in dependency order
+  assumptions: string[];
+  earliest_completion_date?: string;
+  generated_at: string;
+};
+
+export type TimelineResponse = {
+  plan_id: string;
+  timeline: TimelineOutput;
+};
+
+// ----- /validation response (Stage 6) -------------------------------------
+// Mostly deterministic + 1 LLM call (failure_modes). Every output carries
+// `derived_from` or `cites` so the FE can show audit chips.
+
+export type EffectSize = {
+  value: number;
+  type: string;            // "cohens_d" | "percent_change_absolute" | ...
+  derived_from: string;
+};
+
+export type PowerCalculation = {
+  statistical_test: string;
+  alpha: number;
+  power: number;
+  effect_size: EffectSize;
+  n_per_group: number;
+  groups: number;
+  total_n: number;
+  formula: string;
+  assumptions: string[];
+  rationale: string;
+};
+
+export type ValidationSuccessCriterion = {
+  id: string;
+  criterion: string;
+  measurement_method: string;
+  threshold: string;
+  statistical_test?: string;
+  expected_value?: string;
+  derived_from: string;
+};
+
+export type ValidationControl = {
+  name: string;
+  type: "positive" | "negative" | "vehicle" | "sham";
+  purpose: string;
+  derived_from: string;
+};
+
+export type FailureMode = {
+  mode: string;
+  likely_cause: string;
+  mitigation: string;
+  cites: string;
+};
+
+export type ValidationOutput = {
+  success_criteria: ValidationSuccessCriterion[];
+  controls: ValidationControl[];
+  failure_modes: FailureMode[];
+  power_calculation?: PowerCalculation;
+  expected_outcome_summary: string;
+  go_no_go_threshold: string;
+  methodology: string;
+  generated_at: string;
+};
+
+export type ValidationResponse = {
+  plan_id: string;
+  validation: ValidationOutput;
+};
+
+// ----- /critique response (Stage 7) ---------------------------------------
+// Single LLM call. Output schema forces every risk and confounder to
+// carry `cites` pointing to a procedure/step/hypothesis-field. The
+// parser validates against the protocol's procedure list and drops
+// ungrounded entries server-side, so anything that reaches the FE is
+// auditable.
+
+export type Risk = {
+  name: string;
+  severity: "low" | "medium" | "high";
+  category: "statistical" | "experimental" | "biological" | "technical" | "ethical" | "regulatory";
+  description: string;
+  mitigation: string;
+  cites: string;
+};
+
+export type Confounder = {
+  variable: string;
+  why_confounding: string;
+  control_strategy: string;
+  cites: string;
+};
+
+export type CritiqueOutput = {
+  risks: Risk[];
+  confounders: Confounder[];
+  overall_assessment: string;
+  recommendation: "proceed" | "proceed_with_caution" | "revise_design";
+  methodology: string;
+  generated_at: string;
+};
+
+export type CritiqueResponse = {
+  plan_id: string;
+  critique: CritiqueOutput;
+};
+
 // ----- Error shape -------------------------------------------------------
 
 export type ApiError = {
@@ -243,7 +384,7 @@ export function postLitReview(
   return postJson("/lit-review", body, signal);
 }
 
-// /protocol and /materials accept the same {plan_id} OR {structured} forms.
+// /protocol /materials /timeline accept the same {plan_id} OR {structured} forms.
 export type StageRequest =
   | { plan_id: string }
   | { structured: StructuredHypothesis; domain?: string };
@@ -254,4 +395,16 @@ export function postProtocol(body: StageRequest, signal?: AbortSignal): Promise<
 
 export function postMaterials(body: StageRequest, signal?: AbortSignal): Promise<MaterialsResponse> {
   return postJson("/materials", body, signal);
+}
+
+export function postTimeline(body: StageRequest, signal?: AbortSignal): Promise<TimelineResponse> {
+  return postJson("/timeline", body, signal);
+}
+
+export function postValidation(body: StageRequest, signal?: AbortSignal): Promise<ValidationResponse> {
+  return postJson("/validation", body, signal);
+}
+
+export function postCritique(body: StageRequest, signal?: AbortSignal): Promise<CritiqueResponse> {
+  return postJson("/critique", body, signal);
 }

@@ -22,6 +22,7 @@ without a backend change.
 
 from __future__ import annotations
 
+import io
 import os
 import sys
 import traceback
@@ -37,7 +38,7 @@ for _stream in (sys.stdout, sys.stderr):
     if hasattr(_stream, "reconfigure"):
         _stream.reconfigure(encoding="utf-8", errors="replace")
 
-from flask import Flask, jsonify, request  # noqa: E402
+from flask import Flask, jsonify, request, send_file  # noqa: E402
 from flask_cors import CORS  # noqa: E402
 from pydantic import ValidationError  # noqa: E402
 
@@ -273,6 +274,85 @@ def protocol():
 
 
 # ---------------------------------------------------------------------------
+# POST /protocol/pdf
+# ---------------------------------------------------------------------------
+
+@app.post("/protocol/pdf")
+def protocol_pdf():
+    """Render the current protocol to a PDF and return the bytes.
+
+    Same `_resolve_plan` shape as the other stage endpoints (Form A
+    plan_id / Form B structured). When chaining via plan_id the plan
+    must already have `protocol` populated — returns 400 otherwise so
+    the FE can call /protocol first. Form B runs /protocol implicitly.
+
+    Response: application/pdf, with Content-Disposition: attachment
+    and a slugged filename derived from the experiment_type so the
+    user's download lands as e.g. `protocol-cryopreservation-comparison.pdf`.
+    """
+    body = request.get_json(silent=True) or {}
+
+    try:
+        plan, is_new = _resolve_plan(body)
+    except ValidationError as exc:
+        return jsonify({"error": "validation_error", "detail": exc.errors()}), 422
+    except ValueError as exc:
+        return jsonify({"error": "bad_request", "detail": str(exc)}), 400
+
+    # Same chaining rule as /materials, /timeline, /validation: chained
+    # plan must already have a protocol. New (Form B) plans run /protocol
+    # implicitly so curl users can one-shot a PDF from a hypothesis.
+    if not is_new and plan.protocol is None:
+        return jsonify({
+            "error": "protocol_not_run",
+            "detail": "This plan has no protocol yet. POST /protocol first, then retry /protocol/pdf.",
+        }), 400
+
+    if plan.protocol is None:
+        started = now()
+        plan.status["protocol"] = StageStatusRunning(started_at=started)
+        plan.updated_at = started
+        plan_lib.save_plan(plan)
+        try:
+            protocol_out, _outline = protocol_stage.run_protocol_only(plan.hypothesis)
+        except Exception as exc:
+            return _stage_failed_response("protocol", plan, exc)
+        completed = now()
+        plan.protocol = protocol_out
+        plan.status["protocol"] = StageStatusComplete(completed_at=completed)
+        plan.updated_at = completed
+        plan_lib.save_plan(plan)
+
+    # Lazy import — keeps reportlab off the critical-path startup for
+    # the more common JSON endpoints, and isolates PDF errors from the
+    # rest of the app.
+    from protocol_pipeline.pdf import render_protocol_pdf
+
+    try:
+        pdf_bytes = render_protocol_pdf(plan.protocol, plan.hypothesis)
+    except Exception as exc:
+        traceback.print_exc()
+        return jsonify({
+            "error": "pdf_render_error",
+            "detail": "Failed to render protocol PDF. Check server logs for the underlying cause.",
+        }), 500
+
+    # Slugify experiment_type for the download filename. Falls back to
+    # the plan_id when the experiment_type is empty.
+    raw_slug = (plan.protocol.experiment_type or plan.id).lower()
+    slug = "".join(ch if ch.isalnum() else "-" for ch in raw_slug)
+    slug = "-".join(part for part in slug.split("-") if part)[:60] or plan.id
+    filename = f"protocol-{slug}.pdf"
+
+    return send_file(
+        io.BytesIO(pdf_bytes),
+        mimetype="application/pdf",
+        as_attachment=True,
+        download_name=filename,
+    )
+
+
+# ---------------------------------------------------------------------------
 # POST /materials
 # ---------------------------------------------------------------------------
 
@@ -354,6 +434,241 @@ def materials():
         # cross-links from each material to the steps that reference it.
         "frontend_view": adapt_materials(materials_out, protocol=plan.protocol).model_dump(mode="json"),
         "raw": materials_out.model_dump(mode="json"),
+    })
+
+
+# ---------------------------------------------------------------------------
+# POST /timeline
+# ---------------------------------------------------------------------------
+
+@app.post("/timeline")
+def timeline():
+    """Stage 5: deterministic timeline computation.
+
+    Request body — same `_resolve_plan` shape as /protocol /materials:
+      Form A (chain): {"plan_id": "plan_abc..."} — requires the plan to
+        have `protocol` populated.
+      Form B (fresh): {"structured": {...}} — runs /protocol implicitly
+        first. Convenience for curl testing.
+
+    Response:
+        {
+          "plan_id": "...",
+          "timeline": TimelineOutput   // phases, total_duration,
+                                       //   critical_path, assumptions,
+                                       //   per-phase methodology + coverage
+        }
+
+    The compute is purely deterministic (sums step durations) — no LLM
+    call. Same protocol -> byte-for-byte same timeline."""
+    body = request.get_json(silent=True) or {}
+
+    try:
+        plan, is_new = _resolve_plan(body)
+    except ValidationError as exc:
+        return jsonify({"error": "validation_error", "detail": exc.errors()}), 422
+    except ValueError as exc:
+        return jsonify({"error": "bad_request", "detail": str(exc)}), 400
+
+    # Same chaining rule as /materials: a plan_id with no protocol is
+    # an error; new plans run /protocol implicitly.
+    if not is_new and plan.protocol is None:
+        return jsonify({
+            "error": "protocol_not_run",
+            "detail": "This plan has no protocol yet. POST /protocol first, then retry /timeline.",
+        }), 400
+
+    if plan.protocol is None:
+        # Fresh-plan implicit /protocol run
+        started = now()
+        plan.status["protocol"] = StageStatusRunning(started_at=started)
+        plan.updated_at = started
+        plan_lib.save_plan(plan)
+        try:
+            protocol_out, _outline = protocol_stage.run_protocol_only(plan.hypothesis)
+        except Exception as exc:
+            return _stage_failed_response("protocol", plan, exc)
+        completed = now()
+        plan.protocol = protocol_out
+        plan.status["protocol"] = StageStatusComplete(completed_at=completed)
+        plan.updated_at = completed
+        plan_lib.save_plan(plan)
+
+    started = now()
+    plan.status["timeline"] = StageStatusRunning(started_at=started)
+    plan.updated_at = started
+    plan_lib.save_plan(plan)
+
+    try:
+        timeline_out = protocol_stage.run_timeline_only(plan.protocol)
+    except Exception as exc:
+        return _stage_failed_response("timeline", plan, exc)
+
+    completed = now()
+    plan.timeline = timeline_out
+    plan.status["timeline"] = StageStatusComplete(completed_at=completed)
+    plan.updated_at = completed
+    plan_lib.save_plan(plan)
+
+    return jsonify({
+        "plan_id": plan.id,
+        "timeline": timeline_out.model_dump(mode="json"),
+    })
+
+
+# ---------------------------------------------------------------------------
+# POST /validation
+# ---------------------------------------------------------------------------
+
+@app.post("/validation")
+def validation():
+    """Stage 6: experiment-level validation block.
+
+    Aggregates per-procedure success criteria + controls into experiment-
+    level lists, computes a sample-size estimate from hypothesis.expected
+    (regex-extracted effect size, standard two-sample t-test formula),
+    and runs ONE LLM call for failure modes — each forced to cite a
+    specific procedure or step. Citations the parser can't validate are
+    dropped, so every concern in the output is grounded.
+
+    Same `_resolve_plan` shape as /protocol /materials /timeline.
+
+    Response:
+        {
+          "plan_id": "...",
+          "validation": ValidationOutput   // success_criteria[], controls[],
+                                           //   failure_modes[], power_calculation,
+                                           //   methodology
+        }
+    """
+    body = request.get_json(silent=True) or {}
+
+    try:
+        plan, is_new = _resolve_plan(body)
+    except ValidationError as exc:
+        return jsonify({"error": "validation_error", "detail": exc.errors()}), 422
+    except ValueError as exc:
+        return jsonify({"error": "bad_request", "detail": str(exc)}), 400
+
+    # Same chaining rule as /timeline: a plan_id with no protocol is
+    # an error; new plans run /protocol implicitly.
+    if not is_new and plan.protocol is None:
+        return jsonify({
+            "error": "protocol_not_run",
+            "detail": "This plan has no protocol yet. POST /protocol first, then retry /validation.",
+        }), 400
+
+    if plan.protocol is None:
+        started = now()
+        plan.status["protocol"] = StageStatusRunning(started_at=started)
+        plan.updated_at = started
+        plan_lib.save_plan(plan)
+        try:
+            protocol_out, _outline = protocol_stage.run_protocol_only(plan.hypothesis)
+        except Exception as exc:
+            return _stage_failed_response("protocol", plan, exc)
+        completed = now()
+        plan.protocol = protocol_out
+        plan.status["protocol"] = StageStatusComplete(completed_at=completed)
+        plan.updated_at = completed
+        plan_lib.save_plan(plan)
+
+    started = now()
+    plan.status["validation"] = StageStatusRunning(started_at=started)
+    plan.updated_at = started
+    plan_lib.save_plan(plan)
+
+    try:
+        validation_out = protocol_stage.run_validation_only(plan.hypothesis, plan.protocol)
+    except Exception as exc:
+        return _stage_failed_response("validation", plan, exc)
+
+    completed = now()
+    plan.validation = validation_out
+    plan.status["validation"] = StageStatusComplete(completed_at=completed)
+    plan.updated_at = completed
+    plan_lib.save_plan(plan)
+
+    return jsonify({
+        "plan_id": plan.id,
+        "validation": validation_out.model_dump(mode="json"),
+    })
+
+
+# ---------------------------------------------------------------------------
+# POST /critique
+# ---------------------------------------------------------------------------
+
+@app.post("/critique")
+def critique():
+    """Stage 7: design critique.
+
+    One LLM call audits the protocol against the hypothesis and emits
+    risks + confounders. Every entry is REQUIRED to cite a specific
+    procedure, step, or hypothesis field; the parser validates against
+    the protocol's procedure list and drops ungrounded entries. The
+    `recommendation` is recomputed deterministically from the parsed
+    risk severities so it always matches the visible risk profile.
+
+    Same `_resolve_plan` shape as /protocol /materials /timeline /validation.
+
+    Response:
+        {
+          "plan_id": "...",
+          "critique": CritiqueOutput   // risks[], confounders[],
+                                       //   overall_assessment,
+                                       //   recommendation, methodology
+        }
+    """
+    body = request.get_json(silent=True) or {}
+
+    try:
+        plan, is_new = _resolve_plan(body)
+    except ValidationError as exc:
+        return jsonify({"error": "validation_error", "detail": exc.errors()}), 422
+    except ValueError as exc:
+        return jsonify({"error": "bad_request", "detail": str(exc)}), 400
+
+    if not is_new and plan.protocol is None:
+        return jsonify({
+            "error": "protocol_not_run",
+            "detail": "This plan has no protocol yet. POST /protocol first, then retry /critique.",
+        }), 400
+
+    if plan.protocol is None:
+        started = now()
+        plan.status["protocol"] = StageStatusRunning(started_at=started)
+        plan.updated_at = started
+        plan_lib.save_plan(plan)
+        try:
+            protocol_out, _outline = protocol_stage.run_protocol_only(plan.hypothesis)
+        except Exception as exc:
+            return _stage_failed_response("protocol", plan, exc)
+        completed = now()
+        plan.protocol = protocol_out
+        plan.status["protocol"] = StageStatusComplete(completed_at=completed)
+        plan.updated_at = completed
+        plan_lib.save_plan(plan)
+
+    started = now()
+    plan.status["critique"] = StageStatusRunning(started_at=started)
+    plan.updated_at = started
+    plan_lib.save_plan(plan)
+
+    try:
+        critique_out = protocol_stage.run_critique_only(plan.hypothesis, plan.protocol)
+    except Exception as exc:
+        return _stage_failed_response("critique", plan, exc)
+
+    completed = now()
+    plan.critique = critique_out
+    plan.status["critique"] = StageStatusComplete(completed_at=completed)
+    plan.updated_at = completed
+    plan_lib.save_plan(plan)
+
+    return jsonify({
+        "plan_id": plan.id,
+        "critique": critique_out.model_dump(mode="json"),
     })
 
 

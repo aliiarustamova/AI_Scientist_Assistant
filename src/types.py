@@ -298,6 +298,176 @@ StageStatus = (
 )
 
 
+# ---- Stage 5: Timeline ----------------------------------------------------
+# Computed deterministically from the protocol's per-step durations — no LLM
+# call. Each phase shows its `methodology` (how the duration was computed)
+# and `coverage` (fraction of steps with duration data) so a researcher can
+# audit every claim. Conservative-by-design: phases with incomplete duration
+# data return total_duration=None rather than a misleading partial sum.
+
+class TimelineTask(BaseModel):
+    """One step rendered as a timeline task. step_n is the global flat
+    step number (matches ProtocolGenerationOutput.steps); useful for
+    cross-linking from a Gantt chart back to the underlying step."""
+    step_n: int
+    name: str                       # step.title
+    duration: Optional[str] = None  # ISO 8601, None when step has no duration
+    hands_on_time: Optional[str] = None  # not auto-computed yet
+    can_parallel: bool = False      # not auto-detected yet
+
+
+class TimelinePhase(BaseModel):
+    """A logical group of timeline tasks — currently 1:1 with procedures.
+    `coverage` is the fraction of tasks with duration data; `methodology`
+    is a one-line plain-English description of how `duration` was
+    computed (so the user can audit / reproduce)."""
+    id: str                         # "phase-{procedure_index}"
+    name: str                       # procedure.name
+    duration: Optional[str] = None  # sum of task durations; None if any missing
+    tasks: list[TimelineTask]
+    depends_on: list[str] = Field(default_factory=list)
+    parallel_with: list[str] = Field(default_factory=list)
+    # Defensibility / citations:
+    procedure_index: int            # back-link to source procedure
+    coverage: float = 1.0           # 0..1 fraction of tasks with duration data
+    methodology: str                # "Sum of N step durations from procedure 'X'"
+
+
+class TimelineOutput(BaseModel):
+    """Stage 5 output. Deterministic; same protocol -> same timeline.
+    `assumptions` documents what the compute does NOT cover (hands-on
+    time, parallelization opportunities, calendar constraints)."""
+    phases: list[TimelinePhase]
+    total_duration: Optional[str] = None  # ISO 8601 sum across phases
+    critical_path: list[str]              # phase IDs in dependency order
+    assumptions: list[str] = Field(default_factory=list)
+    earliest_completion_date: Optional[str] = None
+    generated_at: str = Field(default_factory=now)
+
+
+# ---- Stage 6: Validation -------------------------------------------------
+# Mix of deterministic + LLM. Deterministic: aggregating procedure-level
+# success criteria + controls into experiment-level lists; extracting
+# effect size from hypothesis.expected via regex; computing n_per_group
+# via the standard two-sample formula. LLM: failure_modes (forced to
+# cite specific procedures/steps so every concern is auditable).
+
+class EffectSize(BaseModel):
+    """Quantitative effect size extracted from the hypothesis (or
+    assumed when explicit values aren't present). `type` values:
+    'cohens_d' | 'percent_change_absolute' | 'percent_change_relative' |
+    'fold_change' | 'odds_ratio' | 'unspecified'."""
+    value: float
+    type: str
+    derived_from: str  # citation, e.g. "hypothesis.expected: '+15 percentage points'"
+
+
+class PowerCalculation(BaseModel):
+    """Standard two-sample power calculation. The formula and every
+    input assumption is surfaced — researchers can audit / re-derive
+    by hand without leaving the page."""
+    statistical_test: str
+    alpha: float                    # typically 0.05
+    power: float                    # typically 0.80
+    effect_size: EffectSize
+    n_per_group: int
+    groups: int
+    total_n: int
+    formula: str                    # plain-English formula description
+    assumptions: list[str] = Field(default_factory=list)
+    rationale: str
+
+
+class SuccessCriterion(BaseModel):
+    """Experiment-level success criterion. Richer than the procedure-
+    level ProcedureSuccessCriterion (adds statistical_test,
+    expected_value). `derived_from` cites the source — procedure
+    name or hypothesis field — so every criterion is auditable."""
+    id: str
+    criterion: str
+    measurement_method: str
+    threshold: str
+    statistical_test: Optional[str] = None
+    expected_value: Optional[str] = None
+    derived_from: str  # "procedure 'Cell Freezing'" | "hypothesis.dependent" | "hypothesis.expected"
+
+
+class Control(BaseModel):
+    """Experimental control aggregated from outline.overall_controls +
+    per-procedure controls."""
+    name: str
+    type: Literal["positive", "negative", "vehicle", "sham"]
+    purpose: str
+    derived_from: str  # "outline.overall_controls" | "procedure 'X'.controls"
+
+
+class FailureMode(BaseModel):
+    """A way the experiment can fail to give a clean answer. LLM-
+    generated but REQUIRED to cite a specific procedure or step;
+    concerns without grounding get filtered out by the parser."""
+    mode: str
+    likely_cause: str
+    mitigation: str
+    cites: str  # "procedure 'X'" | "step N (procedure 'Y')"
+
+
+class ValidationOutput(BaseModel):
+    """Stage 6 output. Defensible by construction: every criterion
+    and control cites its source; failure modes cite specific
+    procedures; power calc shows formula + assumptions explicitly.
+    `methodology` is a top-level audit summary."""
+    success_criteria: list[SuccessCriterion]
+    controls: list[Control]
+    failure_modes: list[FailureMode]
+    power_calculation: Optional[PowerCalculation] = None
+    expected_outcome_summary: str
+    go_no_go_threshold: str
+    methodology: str
+    generated_at: str = Field(default_factory=now)
+
+
+# ---- Stage 7: Critique ---------------------------------------------------
+# Single LLM call. Output schema FORCES every risk + confounder to carry
+# `cites` pointing to a known procedure name (or step "N (procedure X)",
+# or a hypothesis field). The parser validates against the protocol's
+# procedure list and drops anything ungrounded — a critique entry without
+# a citation is a vibes-based concern, not an auditable one.
+
+class Risk(BaseModel):
+    """A specific risk to the experiment producing a clean answer.
+    `severity` reflects how strongly it could compromise the result.
+    `category` lets the FE group risks by type. `cites` is REQUIRED."""
+    name: str
+    severity: Literal["low", "medium", "high"]
+    category: Literal["statistical", "experimental", "biological", "technical", "ethical", "regulatory"]
+    description: str
+    mitigation: str
+    cites: str  # "procedure 'X'" | "step N (procedure 'Y')" | "hypothesis.{field}"
+
+
+class Confounder(BaseModel):
+    """A variable that could confound the dependent measurement.
+    Different from a Risk — confounders are variables the experiment
+    fails to control for, not steps that can fail."""
+    variable: str
+    why_confounding: str
+    control_strategy: str
+    cites: str
+
+
+class CritiqueOutput(BaseModel):
+    """Stage 7 output. `overall_assessment` summarizes go/no-go from
+    the risk profile; `methodology` documents how the critique was
+    produced (model + citation enforcement) so the audit trail lives
+    with the data."""
+    risks: list[Risk]
+    confounders: list[Confounder]
+    overall_assessment: str
+    recommendation: Literal["proceed", "proceed_with_caution", "revise_design"]
+    methodology: str
+    generated_at: str = Field(default_factory=now)
+
+
 # ---- ExperimentPlan (blackboard) -----------------------------------------
 
 class ExperimentPlanMeta(BaseModel):
@@ -323,9 +493,9 @@ class ExperimentPlan(BaseModel):
     protocol: Optional[ProtocolGenerationOutput] = None
     materials: Optional[MaterialsOutput] = None
     budget: Optional[dict[str, Any]] = None          # -> BudgetOutput
-    timeline: Optional[dict[str, Any]] = None        # -> TimelineOutput
-    validation: Optional[dict[str, Any]] = None      # -> ValidationOutput
-    critique: Optional[dict[str, Any]] = None        # -> DesignCritique
+    timeline: Optional[TimelineOutput] = None
+    validation: Optional[ValidationOutput] = None
+    critique: Optional[CritiqueOutput] = None
     summary: Optional[dict[str, Any]] = None         # -> SummaryOutput
 
     status: dict[StageName, StageStatus]

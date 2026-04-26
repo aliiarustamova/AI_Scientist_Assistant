@@ -244,6 +244,40 @@ def run_materials_only(protocol: ProtocolGenerationOutput) -> MaterialsOutput:
     return roll_up_materials(protocol.procedures)
 
 
+def run_timeline_only(protocol: ProtocolGenerationOutput):
+    """Run Stage 5 only: deterministic timeline computation. Designed
+    for a /timeline endpoint that chains off a previously-saved
+    protocol. No LLM call — pure summation of step durations."""
+    # Lazy import to avoid a circular dep with timeline.py (which
+    # imports `_sum_iso8601_durations` from this module).
+    from .timeline import compute_timeline
+    return compute_timeline(protocol)
+
+
+def run_validation_only(
+    hypothesis: Hypothesis,
+    protocol: ProtocolGenerationOutput,
+):
+    """Run Stage 6 only: validation block (success criteria, controls,
+    failure modes, power calc). Mostly deterministic; one LLM call for
+    failure modes. Designed for a /validation endpoint that chains off
+    a previously-saved protocol."""
+    from .validation import compute_validation
+    return compute_validation(hypothesis, protocol)
+
+
+def run_critique_only(
+    hypothesis: Hypothesis,
+    protocol: ProtocolGenerationOutput,
+):
+    """Run Stage 7 only: design critique. One LLM call with citation
+    enforcement (ungrounded risks/confounders dropped by the parser).
+    Designed for a /critique endpoint that chains off a previously-
+    saved protocol."""
+    from .critique import compute_critique
+    return compute_critique(hypothesis, protocol)
+
+
 def run(
     hypothesis: Hypothesis,
     *,
