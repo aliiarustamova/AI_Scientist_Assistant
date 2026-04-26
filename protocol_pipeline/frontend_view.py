@@ -467,7 +467,12 @@ def _build_used_in_index(
 
     Materials are matched case-insensitively because the LLM sometimes
     capitalizes inconsistently ("PBS" vs "pbs"). Returns {} when no
-    protocol is supplied — adapt_materials remains usable standalone."""
+    protocol is supplied — adapt_materials remains usable standalone.
+
+    Dedup: when a material appears in BOTH `reagents_referenced` and
+    `equipment_needed` on the same step (or twice in the same list, which
+    LLMs occasionally do), append the step_id only once. Without this the
+    FE renders duplicate "Used in 2.1" chips for the same step."""
     index: dict[str, list[str]] = {}
     if protocol is None:
         return index
@@ -478,7 +483,9 @@ def _build_used_in_index(
                 key = ref.strip().lower()
                 if not key:
                     continue
-                index.setdefault(key, []).append(step_id)
+                step_ids = index.setdefault(key, [])
+                if step_id not in step_ids:
+                    step_ids.append(step_id)
     return index
 
 

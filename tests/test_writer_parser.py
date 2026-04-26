@@ -14,6 +14,7 @@ from protocol_pipeline.writer import (
     _MAX_RECIPES_PER_STEP,
     _MAX_TROUBLESHOOTING_PER_STEP,
     _build_steps,
+    _coerce_bool,
     _coerce_reagent_recipe,
 )
 
@@ -49,9 +50,7 @@ def test_anticipated_outcome_string_or_none():
 
 def test_is_critical_and_pause_point_coerced_to_bool():
     """LLM occasionally emits booleans as strings ('true') or numbers (1).
-    bool() coercion is intentional: 'true'/1 become True; '' / 0 become
-    False. This is more permissive than ideal but matches the spirit of
-    'whatever the model meant by truthy'.
+    The parser uses _coerce_bool which accepts genuine truthy values.
 
     NOTE: We use 5 steps with only 1 critical (20%) to stay below the
     30% bound — the bound itself is exercised by separate tests below."""
@@ -65,6 +64,44 @@ def test_is_critical_and_pause_point_coerced_to_bool():
     steps = _build_steps(raw, known_source_ids=set())
     assert steps[0].is_critical is True and steps[0].is_pause_point is False
     assert steps[1].is_critical is False and steps[1].is_pause_point is True
+
+
+def test_coerce_bool_handles_string_false_correctly():
+    """The bug Python's naive bool() has: bool("false") is True (any
+    non-empty string is truthy). _coerce_bool reads the string content.
+
+    This is the bug Gemini caught on PR #9 — without _coerce_bool, an
+    LLM that emits {"is_critical": "false"} would have every step flagged
+    critical, which then trips the 30% bound and demotes all of them.
+    Either way, the user gets the wrong answer."""
+    # The classic Python footgun:
+    assert bool("false") is True   # demonstrates why _coerce_bool exists
+
+    # Truthy inputs we honor:
+    for v in [True, "true", "True", "TRUE", "yes", "1", 1]:
+        assert _coerce_bool(v) is True, f"expected True for {v!r}"
+
+    # Falsy inputs — including the strings that Python's bool() would
+    # mishandle. Crucially: "false" must coerce to False.
+    for v in [False, "false", "False", "FALSE", "no", "0", "", "anything-else", 0, None]:
+        assert _coerce_bool(v) is False, f"expected False for {v!r}"
+
+
+def test_string_false_does_not_flag_step_critical():
+    """End-to-end check that the bool() bug doesn't sneak back in via
+    _build_steps. Five steps emit "false" (string) and "true" (string);
+    the parser must respect the strings, not Python's truthy-by-default
+    treatment of any non-empty string."""
+    raw = [
+        {"n": 1, "title": "A", "body_md": "x", "is_critical": "false", "is_pause_point": "false"},
+        {"n": 2, "title": "B", "body_md": "x", "is_critical": "false", "is_pause_point": "true"},
+        {"n": 3, "title": "C", "body_md": "x", "is_critical": "true",  "is_pause_point": "false"},
+        {"n": 4, "title": "D", "body_md": "x", "is_critical": "false", "is_pause_point": "false"},
+        {"n": 5, "title": "E", "body_md": "x", "is_critical": "false", "is_pause_point": "false"},
+    ]
+    steps = _build_steps(raw, known_source_ids=set())
+    assert sum(1 for s in steps if s.is_critical) == 1     # only step 3
+    assert sum(1 for s in steps if s.is_pause_point) == 1  # only step 2
 
 
 # ---- Critical-step bound (>30% gets all demoted) -----------------------

@@ -521,6 +521,37 @@ def test_adapt_materials_populates_used_in_steps_when_protocol_provided():
     assert by_name["Unused thing"].used_in_steps == []
 
 
+def test_adapt_materials_used_in_steps_deduped_per_step():
+    """A material referenced in BOTH equipment_needed AND reagents_referenced
+    on the same step must NOT appear twice in used_in_steps. Same goes
+    for duplicate entries within a single list (LLMs occasionally repeat
+    items). Without dedup the FE renders "Used in 2.1, 2.1" chips."""
+    step1 = _step_with(
+        # "PBS" appears in both lists on the SAME step:
+        reagents_referenced=["PBS"],
+        equipment_needed=["PBS"],
+    )
+    step2 = _step_with(
+        # "PBS" appears twice in the same list:
+        reagents_referenced=["PBS", "pbs"],  # also tests case-insensitivity
+    )
+    proto = ProtocolGenerationOutput(
+        experiment_type="t",
+        procedures=[Procedure(name="P1", intent="t", steps=[step1, step2])],
+        steps=[],
+        total_steps=2,
+    )
+    mats = MaterialsOutput(
+        materials=[_mat("PBS", category="reagent")],
+        total_unique_items=1,
+    )
+    fe = adapt_materials(mats, protocol=proto)
+    [item] = [it for g in fe.groups for it in g.items]
+    # Each step appears at most once even though PBS is referenced twice
+    # on each step. Order = first appearance.
+    assert item.used_in_steps == ["p1-s1", "p1-s2"]
+
+
 def test_adapt_materials_used_in_steps_empty_without_protocol():
     """When no protocol is passed, used_in_steps stays empty — adapter
     is still callable standalone (e.g., from tests or FE design mode)."""

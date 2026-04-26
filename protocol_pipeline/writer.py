@@ -303,6 +303,26 @@ _MAX_RECIPE_COMPONENTS = 30
 _CRITICAL_STEP_FRACTION_BOUND = 0.30
 
 
+def _coerce_bool(v) -> bool:
+    """Lenient bool coercion that handles every shape we've seen LLMs emit
+    for boolean fields. Crucially, `bool("false")` is True in Python (any
+    non-empty string is truthy), so a naive `bool(v)` would mis-flag steps
+    as critical / pause points when the model emits a JSON string. This
+    helper accepts:
+      - actual booleans
+      - strings: "true"/"yes"/"1" -> True; everything else -> False
+      - integers: 1 -> True; anything else -> False
+      - None / missing -> False
+    """
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, str):
+        return v.strip().lower() in ("true", "yes", "1")
+    if isinstance(v, (int, float)):
+        return v == 1
+    return False
+
+
 def _coerce_reagent_recipe(raw) -> ReagentRecipe | None:
     if not isinstance(raw, dict):
         return None
@@ -337,8 +357,9 @@ def _build_steps(raw_steps: Iterable, *, known_source_ids: set[str]) -> list[Pro
         notes = raw.get("notes")
         anticipated = raw.get("anticipated_outcome")
         # Troubleshooting + recipe arrays — accept only well-formed entries,
-        # drop empties, cap counts. Bool coercion is explicit defense against
-        # the LLM emitting "true" as a string.
+        # drop empties, cap counts. is_critical / is_pause_point go through
+        # _coerce_bool because the LLM occasionally emits string "false",
+        # which Python's bool() would treat as truthy.
         troubleshooting_raw = raw.get("troubleshooting") or []
         troubleshooting = [
             str(t).strip() for t in troubleshooting_raw if str(t).strip()
@@ -364,8 +385,8 @@ def _build_steps(raw_steps: Iterable, *, known_source_ids: set[str]) -> list[Pro
             source_step_refs=refs,
             notes=str(notes) if notes else None,
             anticipated_outcome=str(anticipated).strip() if anticipated else None,
-            is_critical=bool(raw.get("is_critical", False)),
-            is_pause_point=bool(raw.get("is_pause_point", False)),
+            is_critical=_coerce_bool(raw.get("is_critical")),
+            is_pause_point=_coerce_bool(raw.get("is_pause_point")),
             troubleshooting=troubleshooting,
             reagent_recipes=recipes,
         ))
