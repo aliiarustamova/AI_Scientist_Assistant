@@ -26,6 +26,10 @@ export type StructuredHypothesis = {
   expected: string;
 };
 
+export type ParseHypothesisResponse = {
+  structured: StructuredHypothesis;
+};
+
 export type Citation = {
   source: string;
   confidence: "high" | "medium" | "low";
@@ -46,6 +50,11 @@ export type LitReviewResponse = {
   signal: "novel" | "similar_work_exists" | "exact_match_found";
   description: string;
   references: Citation[];
+  key_differences: Array<{
+    matched_on: string;
+    yours: string;
+    prior: string;
+  }>;
   searched_at: string;
   tavily_query: string;   // legacy field name; populated with whatever query was sent
   summary: string;
@@ -243,10 +252,18 @@ export function postLitReview(
   return postJson("/lit-review", body, signal);
 }
 
+export function postParseHypothesis(
+  body: { text: string },
+  signal?: AbortSignal,
+): Promise<ParseHypothesisResponse> {
+  return postJson("/parse-hypothesis", body, signal);
+}
+
 // /protocol and /materials accept the same {plan_id} OR {structured} forms.
+// Optional user_constraints: Protocol sources step (equipment, time, etc.).
 export type StageRequest =
-  | { plan_id: string }
-  | { structured: StructuredHypothesis; domain?: string };
+  | { plan_id: string; user_constraints?: string }
+  | { structured: StructuredHypothesis; domain?: string; user_constraints?: string };
 
 export function postProtocol(body: StageRequest, signal?: AbortSignal): Promise<ProtocolResponse> {
   return postJson("/protocol", body, signal);
@@ -254,4 +271,35 @@ export function postProtocol(body: StageRequest, signal?: AbortSignal): Promise<
 
 export function postMaterials(body: StageRequest, signal?: AbortSignal): Promise<MaterialsResponse> {
   return postJson("/materials", body, signal);
+}
+
+export type ProtocolSourceCard = {
+  id: string;
+  title: string;
+  source: string;
+  summary: string;
+  keySteps: string[];
+  /** One-line attribution (authors, year, DOI or URL); from API for protocols.io */
+  citation?: string;
+  /** protocols.io public page when available (not shown as a CTA in the card) */
+  url?: string;
+};
+
+export type ProtocolSourcesFetchMode =
+  | "missing_credentials"
+  | "publications_only"
+  | "search"
+  | "publications_fallback"
+  | "empty"
+  | "error";
+
+export function postProtocolSources(
+  body: { structured?: StructuredHypothesis | null },
+  signal?: AbortSignal,
+): Promise<{
+  sources: ProtocolSourceCard[];
+  search_query?: string;
+  fetch_mode?: ProtocolSourcesFetchMode;
+}> {
+  return postJson("/protocol-sources", body, signal);
 }

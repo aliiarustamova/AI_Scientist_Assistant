@@ -15,9 +15,12 @@ import {
   FlaskConical,
   Info,
   Pencil,
+  RefreshCw,
   Sparkles,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Tooltip,
   TooltipContent,
@@ -59,21 +62,98 @@ const CONCEPT_DOT = {
   condition: "bg-[hsl(38_70%_45%)]",
 } as const;
 
-// Structured hypothesis with color-coded concepts inline
-const HYPOTHESIS_PARTS: Array<{
-  text: string;
-  tone?: keyof typeof CONCEPT;
+type HypothesisPart = { text: string; tone?: keyof typeof CONCEPT; dim?: boolean };
+
+function buildResearchQuestion(s: StructuredHypothesis): string {
+  const q = s.research_question?.trim();
+  if (q) return q;
+  return (
+    `Does ${s.independent || "the intervention"} affect ` +
+    `${s.dependent || "the outcome"} in ${s.subject || "the system"}` +
+    (s.conditions ? ` under ${s.conditions}` : "") +
+    "?"
+  );
+}
+
+const EDIT_FIELD_LABELS: Array<{
+  key: keyof StructuredHypothesis;
+  label: string;
+  multiline?: boolean;
 }> = [
-  { text: "Increasing " },
-  { text: "glucose concentration", tone: "variable" },
-  { text: " in M9 minimal media reduces the specific growth rate of " },
-  { text: "E. coli K-12", tone: "subject" },
-  { text: " above " },
-  { text: "10 mM", tone: "variable" },
-  { text: ", due to catabolite repression under " },
-  { text: "aerobic conditions at 37 °C", tone: "condition" },
-  { text: "." },
+  { key: "research_question", label: "Research question", multiline: true },
+  { key: "subject", label: "Subject" },
+  { key: "independent", label: "Independent variable" },
+  { key: "dependent", label: "Dependent variable" },
+  { key: "conditions", label: "Conditions" },
+  { key: "expected", label: "Expected outcome" },
 ];
+
+function hasStructuredCore(h: StructuredHypothesis): boolean {
+  return Boolean(
+    h.subject?.trim() ||
+    h.independent?.trim() ||
+    h.dependent?.trim() ||
+    h.conditions?.trim() ||
+    h.expected?.trim(),
+  );
+}
+
+/**
+ * Renders the hypothesis for the card: prefer the same research question the user
+ * confirmed on step 1 (stays in sync with the lab). If that is empty but fields exist,
+ * show a colored structured line with "—" for missing slots (no fake highlighted placeholders).
+ */
+function hypothesisToParts(h?: StructuredHypothesis): HypothesisPart[] {
+  // Fallback keeps the design demo path stable when no router state exists.
+  if (!h) {
+    return [
+      { text: "Increasing " },
+      { text: "glucose concentration", tone: "variable" },
+      { text: " in M9 minimal media reduces the specific growth rate of " },
+      { text: "E. coli K-12", tone: "subject" },
+      { text: " above " },
+      { text: "10 mM", tone: "variable" },
+      { text: ", due to catabolite repression under " },
+      { text: "aerobic conditions at 37 °C", tone: "condition" },
+      { text: "." },
+    ];
+  }
+
+  const rq = h.research_question?.trim() ?? "";
+  if (rq) {
+    // Matches step 1 / API: this is the clearest one-line view of the hypothesis.
+    return [{ text: rq }];
+  }
+
+  if (!hasStructuredCore(h)) {
+    return [
+      {
+        text:
+          "Write your hypothesis in step 1, or use Edit to add it here. Once your research question and fields are set on the lab page, they will show here the same way for the literature check.",
+      },
+    ];
+  }
+
+  const s = h.subject?.trim() ?? "";
+  const ind = h.independent?.trim() ?? "";
+  const dep = h.dependent?.trim() ?? "";
+  const cond = h.conditions?.trim() ?? "";
+  const exp = h.expected?.trim() ?? "";
+
+  return [
+    { text: "In " },
+    s ? { text: s, tone: "subject" } : { text: "—", dim: true },
+    { text: ", changing " },
+    ind ? { text: ind, tone: "variable" } : { text: "—", dim: true },
+    { text: " is expected to affect " },
+    dep ? { text: dep, tone: "variable" } : { text: "—", dim: true },
+    { text: " under " },
+    cond ? { text: cond, tone: "condition" } : { text: "—", dim: true },
+    { text: ". Expected outcome: " },
+    exp ? { text: exp, tone: "variable" } : { text: "—", dim: true },
+    { text: "." },
+  ];
+}
 
 // ---- Mocked backend response ------------------------------------------------
 // In production these come from the literature-check service. Field names
@@ -266,7 +346,24 @@ const LiteratureCheck = () => {
   // so the design-mockup mode still renders.
   const navState = (location.state as
     { structured?: StructuredHypothesis; domain?: string } | null) ?? null;
-  const inputHypothesis = navState?.structured;
+  // Local override when user edits on this page; null means use nav state.
+  const [localHypothesis, setLocalHypothesis] = useState<StructuredHypothesis | null>(null);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editDraft, setEditDraft] = useState<StructuredHypothesis | null>(null);
+  // Increments to rerun /lit-review with the same hypothesis (e.g. after a transient error).
+  const [assessmentKey, setAssessmentKey] = useState(0);
+
+  const workingHypothesis = useMemo(
+    () => localHypothesis ?? navState?.structured,
+    [localHypothesis, navState?.structured],
+  );
+
+  // New navigation (e.g. from /lab) should replace any in-page override.
+  useEffect(() => {
+    setLocalHypothesis(null);
+    setIsEditing(false);
+    setEditDraft(null);
+  }, [location.key]);
 
   const [stageIdx, setStageIdx] = useState(0);
   const [done, setDone] = useState(false);
@@ -281,7 +378,7 @@ const LiteratureCheck = () => {
   const [apiError, setApiError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!inputHypothesis) {
+    if (!workingHypothesis) {
       // Mock-only path: pages design used a 2.4s scripted reveal; preserve it.
       const t1 = window.setTimeout(() => setStageIdx(1), 1100);
       const t2 = window.setTimeout(() => setDone(true), 2400);
@@ -294,8 +391,16 @@ const LiteratureCheck = () => {
     // text appear after a short delay. The "done" flag flips when the
     // response (or an error) arrives.
     const ac = new AbortController();
+    setStageIdx(0);
+    setDone(false);
+    setLitResult(null);
+    setApiError(null);
+    setExpandedId(null);
     const stageTimer = window.setTimeout(() => setStageIdx(1), 2500);
-    postLitReview({ structured: inputHypothesis }, ac.signal)
+    postLitReview(
+      { structured: workingHypothesis, domain: navState?.domain },
+      ac.signal,
+    )
       .then((res) => {
         setLitResult(res);
         setDone(true);
@@ -311,7 +416,7 @@ const LiteratureCheck = () => {
       ac.abort();
       window.clearTimeout(stageTimer);
     };
-  }, [inputHypothesis]);
+  }, [workingHypothesis, assessmentKey, navState?.domain]);
 
   // Derived display values: prefer real API data; fall back to mock
   // constants so design-mockup mode (no hypothesis) still renders.
@@ -324,8 +429,48 @@ const LiteratureCheck = () => {
     if (!litResult) return REFERENCES;
     return litResult.references.map(citationToReference);
   }, [litResult]);
+  const hypothesisParts = useMemo(
+    () => hypothesisToParts(workingHypothesis ?? undefined),
+    [workingHypothesis],
+  );
+  const keyDifferences = useMemo(() => {
+    if (!litResult?.key_differences?.length) return KEY_DIFFERENCES;
+    return litResult.key_differences;
+  }, [litResult]);
 
   const progressPct = done ? 100 : stageIdx === 0 ? 35 : 75;
+  const hasLiveHypothesis = Boolean(workingHypothesis);
+  const reviewControlsDisabled = hasLiveHypothesis && !done;
+
+  const startEdit = () => {
+    if (!workingHypothesis) return;
+    setEditDraft({ ...workingHypothesis });
+    setIsEditing(true);
+  };
+
+  const cancelEdit = () => {
+    setIsEditing(false);
+    setEditDraft(null);
+  };
+
+  const saveEdit = () => {
+    if (!editDraft) return;
+    const next: StructuredHypothesis = {
+      ...editDraft,
+      research_question: buildResearchQuestion(editDraft),
+    };
+    setIsEditing(false);
+    setEditDraft(null);
+    setLocalHypothesis(null);
+    navigate("/literature", {
+      replace: true,
+      state: { structured: next, domain: navState?.domain },
+    });
+  };
+
+  const rerunAssessment = () => {
+    setAssessmentKey((k) => k + 1);
+  };
 
   return (
     <div className="relative min-h-screen overflow-hidden bg-paper text-ink">
@@ -409,7 +554,7 @@ const LiteratureCheck = () => {
         <section aria-labelledby="page-title" className="mb-12">
           <p className="font-mono-notebook text-[13px] uppercase tracking-[0.22em] text-muted-foreground">
             <span className="text-primary">●</span>&nbsp;&nbsp;Step{" "}
-            <span className="text-ink">02</span> of 04 — Literature Check
+            <span className="text-ink">02</span> of 05 — Literature Check
           </p>
           <h1
             id="page-title"
@@ -421,56 +566,146 @@ const LiteratureCheck = () => {
 
           {/* Hypothesis recap card — color-coded concepts + interactive legend */}
           <div className="mt-8 overflow-hidden rounded-md border border-rule bg-paper-raised">
-            <div className="flex items-start justify-between gap-4 border-b border-rule px-6 py-4">
+            <div className="flex flex-wrap items-start justify-between gap-3 border-b border-rule px-6 py-4">
               <p className="font-mono-notebook text-[12px] uppercase tracking-[0.22em] text-ink-soft">
                 Your hypothesis
               </p>
-              <Link
-                to="/"
-                className="inline-flex items-center gap-1.5 font-mono-notebook text-[12px] uppercase tracking-[0.18em] text-ink-soft transition-colors hover:text-primary"
-              >
-                <Pencil className="h-3 w-3" strokeWidth={1.75} />
-                Edit
-              </Link>
-            </div>
-            <p
-              className="px-6 py-5 text-[20px] leading-[1.6] text-ink"
-              style={{
-                fontFamily: '"Instrument Serif", Georgia, serif',
-                letterSpacing: "0.005em",
-              }}
-            >
-              {HYPOTHESIS_PARTS.map((part, i) =>
-                part.tone ? (
-                  <span
-                    key={i}
-                    className={
-                      "inline rounded-[2px] px-[3px] py-[1px] transition-all duration-300 " +
-                      CONCEPT[part.tone] +
-                      (activeConcept && activeConcept !== part.tone
-                        ? " opacity-30"
-                        : " opacity-100") +
-                      (activeConcept === part.tone
-                        ? " ring-1 ring-offset-1 ring-offset-paper-raised ring-current"
-                        : "")
-                    }
-                  >
-                    {part.text}
-                  </span>
-                ) : (
-                  <span
-                    key={i}
-                    className={
-                      "transition-opacity duration-300 " +
-                      (activeConcept ? "opacity-40" : "opacity-100")
-                    }
-                  >
-                    {part.text}
-                  </span>
-                )
+              {hasLiveHypothesis && (
+                <div className="flex flex-wrap items-center justify-end gap-2 sm:gap-2.5">
+                  {isEditing ? (
+                    <>
+                      <button
+                        type="button"
+                        onClick={cancelEdit}
+                        className="font-mono-notebook text-[12px] uppercase tracking-[0.18em] text-ink-soft transition-colors hover:text-ink"
+                      >
+                        Cancel
+                      </button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        onClick={saveEdit}
+                        disabled={!editDraft}
+                        className="h-8 rounded-sm bg-ink px-3 font-mono-notebook text-[11px] uppercase tracking-[0.2em] text-paper"
+                      >
+                        Save &amp; rerun check
+                      </Button>
+                    </>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        onClick={rerunAssessment}
+                        disabled={reviewControlsDisabled}
+                        className="inline-flex items-center gap-1.5 font-mono-notebook text-[12px] uppercase tracking-[0.18em] text-ink-soft transition-colors hover:text-primary disabled:pointer-events-none disabled:opacity-40"
+                        title="Run the literature check again with the current hypothesis"
+                      >
+                        <RefreshCw className="h-3 w-3" strokeWidth={1.75} />
+                        Rerun
+                      </button>
+                      <span aria-hidden className="hidden h-3 w-px bg-rule sm:block" />
+                      <button
+                        type="button"
+                        onClick={startEdit}
+                        disabled={reviewControlsDisabled}
+                        className="inline-flex items-center gap-1.5 font-mono-notebook text-[12px] uppercase tracking-[0.18em] text-ink-soft transition-colors hover:text-primary disabled:pointer-events-none disabled:opacity-40"
+                      >
+                        <Pencil className="h-3 w-3" strokeWidth={1.75} />
+                        Edit
+                      </button>
+                    </>
+                  )}
+                </div>
               )}
-            </p>
-            {/* Interactive legend */}
+            </div>
+            {isEditing && editDraft ? (
+              <div className="divide-y divide-rule px-6 py-4">
+                {EDIT_FIELD_LABELS.map(({ key, label, multiline }) => {
+                  const v = editDraft[key];
+                  return (
+                    <div key={key} className="py-3 first:pt-0 last:pb-0">
+                      <label
+                        htmlFor={`edit-${key}`}
+                        className="block font-mono-notebook text-[10px] uppercase tracking-[0.2em] text-ink-soft"
+                      >
+                        {label}
+                      </label>
+                      {multiline ? (
+                        <Textarea
+                          id={`edit-${key}`}
+                          value={v}
+                          onChange={(e) =>
+                            setEditDraft((d) =>
+                              d ? { ...d, [key]: e.target.value } : d
+                            )
+                          }
+                          rows={key === "research_question" ? 2 : 3}
+                          className="mt-1.5 min-h-0 border-rule bg-paper text-[15px] text-ink"
+                        />
+                      ) : (
+                        <Input
+                          id={`edit-${key}`}
+                          value={v}
+                          onChange={(e) =>
+                            setEditDraft((d) =>
+                              d ? { ...d, [key]: e.target.value } : d
+                            )
+                          }
+                          className="mt-1.5 border-rule bg-paper text-[15px] text-ink"
+                        />
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <p
+                className="px-6 py-5 text-[20px] leading-[1.6] text-ink"
+                style={{
+                  fontFamily: '"Instrument Serif", Georgia, serif',
+                  letterSpacing: "0.005em",
+                }}
+              >
+                {hypothesisParts.map((part, i) =>
+                  part.tone ? (
+                    <span
+                      key={i}
+                      className={
+                        "inline rounded-[2px] px-[3px] py-[1px] transition-all duration-300 " +
+                        CONCEPT[part.tone] +
+                        (activeConcept && activeConcept !== part.tone
+                          ? " opacity-30"
+                          : " opacity-100") +
+                        (activeConcept === part.tone
+                          ? " ring-1 ring-offset-1 ring-offset-paper-raised ring-current"
+                          : "")
+                      }
+                    >
+                      {part.text}
+                    </span>
+                  ) : part.dim ? (
+                    <span
+                      key={i}
+                      className="text-ink-soft/90 italic"
+                    >
+                      {part.text}
+                    </span>
+                  ) : (
+                    <span
+                      key={i}
+                      className={
+                        "transition-opacity duration-300 " +
+                        (activeConcept ? "opacity-40" : "opacity-100")
+                      }
+                    >
+                      {part.text}
+                    </span>
+                  )
+                )}
+              </p>
+            )}
+            {/* Interactive legend — only when we show color-coded fields; hide for prose-only or empty prompt */}
+            {!isEditing && hypothesisParts.some((p) => p.tone) && (
             <div className="flex flex-wrap items-center gap-2 border-t border-rule bg-paper/60 px-6 py-3">
               <span className="font-mono-notebook text-[10px] uppercase tracking-[0.24em] text-muted-foreground">
                 Concepts
@@ -514,6 +749,7 @@ const LiteratureCheck = () => {
                 );
               })}
             </div>
+            )}
           </div>
         </section>
 
@@ -899,7 +1135,7 @@ const LiteratureCheck = () => {
                 </h2>
               </header>
               <ol className="divide-y divide-rule">
-                {KEY_DIFFERENCES.map((d, i) => (
+                {keyDifferences.map((d, i) => (
                   <li key={i} className="px-7 py-5">
                     <p className="font-mono-notebook text-[11px] uppercase tracking-[0.22em] text-muted-foreground">
                       {d.matched_on}
@@ -972,10 +1208,10 @@ const LiteratureCheck = () => {
                     </p>
                   </div>
                   <h3 className="mt-4 font-serif-display text-[26px] leading-tight text-ink">
-                    Experiment plan
+                    Protocol sources
                   </h3>
                   <p className="mt-2 text-[14px] leading-[1.65] text-ink-soft">
-                    We'll now construct a full experimental plan including protocol, materials, and timeline.
+                    Choose prior protocols and set constraints to steer how the plan is built.
                   </p>
                 </div>
               </div>
@@ -984,7 +1220,13 @@ const LiteratureCheck = () => {
                 <div className="flex items-center gap-5">
                   <button
                     type="button"
-                    onClick={() => navigate("/lab")}
+                    onClick={() =>
+                      navigate("/lab", {
+                        state: workingHypothesis
+                          ? { structured: workingHypothesis, domain: navState?.domain }
+                          : undefined,
+                      })
+                    }
                     className="group inline-flex items-center gap-2 font-mono-notebook text-[12px] uppercase tracking-[0.2em] text-muted-foreground transition-colors hover:text-ink"
                     aria-label="Go back to hypothesis"
                   >
@@ -997,10 +1239,11 @@ const LiteratureCheck = () => {
                   </p>
                 </div>
                 <Button
-                  onClick={() => navigate("/plan", {
+                  onClick={() => navigate("/protocol-sources", {
                     state: {
                       plan_id: litResult?.plan_id,
-                      structured: inputHypothesis,
+                      structured: workingHypothesis,
+                      domain: navState?.domain,
                     },
                   })}
                   className="group h-14 gap-3 rounded-sm bg-ink px-7 text-[15px] font-medium text-paper shadow-[0_8px_24px_-12px_hsl(var(--ink)/0.6)] transition-all hover:bg-ink/90 hover:shadow-[0_10px_28px_-10px_hsl(var(--ink)/0.7)]"
@@ -1009,7 +1252,7 @@ const LiteratureCheck = () => {
                     Step 03 →
                   </span>
                   <span className="font-serif-display text-[19px] italic">
-                    Generate experiment plan
+                    Protocol sources
                   </span>
                   <ArrowRight
                     className="h-5 w-5 transition-transform group-hover:translate-x-0.5"

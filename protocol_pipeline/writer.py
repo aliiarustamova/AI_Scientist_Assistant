@@ -39,6 +39,7 @@ from src.types import (
 )
 
 from .architect import ProcedureOutline
+from .hypothesis_context import append_user_constraints
 from .sources import NormalizedProtocol
 
 
@@ -143,7 +144,7 @@ THIS procedure (you are writing this one only):
 - Cited source protocol ids: {source_ids}
 
 Source protocols ({n_sources}):
-{sources}"""
+{sources}{user_constraints_suffix}"""
 
 
 def _format_source(p: NormalizedProtocol) -> str:
@@ -202,6 +203,7 @@ def write_procedure(
         source_ids=outline.source_protocol_ids or "(none)",
         n_sources=len(relevant_sources),
         sources=sources_blob,
+        user_constraints_suffix=append_user_constraints(hypothesis),
     )
 
     parsed = llm.complete_json(WRITER_SYSTEM, user, agent_name="Procedure writer")

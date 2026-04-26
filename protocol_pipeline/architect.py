@@ -26,6 +26,7 @@ from pydantic import BaseModel, Field
 from src.clients import llm
 from src.types import Hypothesis
 
+from .hypothesis_context import append_user_constraints
 from .relevance import ScoredProtocol
 
 
@@ -105,7 +106,7 @@ ARCHITECT_USER_TMPL = """Hypothesis (structured):
 - Research question: {research_question}
 
 Source protocols ({n}, sorted by relevance):
-{sources}"""
+{sources}{user_constraints_suffix}"""
 
 
 def _format_source(sp: ScoredProtocol, *, max_steps: int = 6, max_step_chars: int = 220) -> str:
@@ -146,6 +147,7 @@ def plan_outline(
         research_question=s.research_question,
         n=len(scored),
         sources=sources_blob,
+        user_constraints_suffix=append_user_constraints(hypothesis),
     )
 
     parsed = llm.complete_json(ARCHITECT_SYSTEM, user, agent_name="Architect")

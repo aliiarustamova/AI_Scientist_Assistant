@@ -29,6 +29,7 @@ import {
   Timer,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import type { ProtocolSourceSelection } from "./ProtocolSources";
 
 const HYPOTHESIS_SUMMARY =
   "Increasing glucose concentration in M9 minimal media reduces the specific growth rate of E. coli K-12 above 10 mM, due to catabolite repression under aerobic conditions at 37 °C.";
@@ -676,9 +677,11 @@ const ExperimentPlan = () => {
       plan_id?: string;
       structured?: StructuredHypothesis;
       domain?: string;
+      protocolSourceSelection?: ProtocolSourceSelection;
     } | null) ?? null;
   const incomingPlanId = navState?.plan_id;
   const incomingStructured = navState?.structured;
+  const userConstraints = navState?.protocolSourceSelection?.preferences?.constraints?.trim() ?? "";
 
   // Section reveal index: 0 nothing, 1 protocol, 2 + materials, 3 + budget+timeline, 4 + validation+feasibility.
   // Real-API path advances reveal as each backend call resolves; mock path
@@ -712,9 +715,15 @@ const ExperimentPlan = () => {
     // shows two stages (Protocol, Materials), so we map them onto stageIdx
     // and bump `reveal` as each section's data arrives.
     const ac = new AbortController();
+    const withConstraints = <T extends { user_constraints?: string }>(b: T): T => {
+      if (userConstraints) {
+        b.user_constraints = userConstraints;
+      }
+      return b;
+    };
     const protoBody = incomingPlanId
-      ? { plan_id: incomingPlanId }
-      : { structured: incomingStructured! };
+      ? withConstraints({ plan_id: incomingPlanId })
+      : withConstraints({ structured: incomingStructured! });
     const matsBody = (planId: string) => ({ plan_id: planId });
 
     setStageIdx(0);
@@ -751,7 +760,7 @@ const ExperimentPlan = () => {
     })();
 
     return () => ac.abort();
-  }, [incomingPlanId, incomingStructured, useMockData]);
+  }, [incomingPlanId, incomingStructured, useMockData, userConstraints]);
 
   // Display data: prefer backend-driven; fall back to mock constants for
   // mock-only mode or if a section's API call hasn't resolved yet. The
@@ -860,7 +869,7 @@ const ExperimentPlan = () => {
         <section aria-labelledby="page-title" className="mb-12">
           <p className="font-mono-notebook text-[13px] uppercase tracking-[0.22em] text-muted-foreground">
             <span className="text-primary">●</span>&nbsp;&nbsp;Step{" "}
-            <span className="text-ink">03</span> of 04 — Experiment Plan
+            <span className="text-ink">04</span> of 05 — Experiment Plan
           </p>
           <h1
             id="page-title"
@@ -1867,7 +1876,7 @@ const ExperimentPlan = () => {
                     <Check className="h-3.5 w-3.5" strokeWidth={2.5} />
                   </span>
                   <p className="font-mono-notebook text-[12px] uppercase tracking-[0.22em] text-muted-foreground">
-                    Step 03
+                    Step 04
                   </p>
                 </div>
                 <h3 className="mt-4 font-serif-display text-[26px] leading-tight text-ink">
@@ -1889,10 +1898,10 @@ const ExperimentPlan = () => {
               <div className="px-7 py-7 sm:px-9 sm:py-9">
                 <div className="flex items-center gap-3">
                   <span className="flex h-7 w-7 items-center justify-center rounded-full border border-primary/60 bg-paper text-[12px] font-medium text-primary">
-                    04
+                    05
                   </span>
                   <p className="font-mono-notebook text-[12px] uppercase tracking-[0.22em] text-primary">
-                    Step 04 — Up next
+                    Step 05 — Up next
                   </p>
                 </div>
                 <h3 className="mt-4 font-serif-display text-[26px] leading-tight text-ink">
@@ -1908,12 +1917,21 @@ const ExperimentPlan = () => {
               <div className="flex items-center gap-5">
                 <button
                   type="button"
-                  onClick={() => navigate("/literature")}
+                  onClick={() =>
+                    navigate("/protocol-sources", {
+                      state: {
+                        plan_id: incomingPlanId,
+                        structured: incomingStructured,
+                        domain: navState?.domain,
+                        protocolSourceSelection: navState?.protocolSourceSelection,
+                      },
+                    })
+                  }
                   className="group inline-flex items-center gap-2 font-mono-notebook text-[12px] uppercase tracking-[0.2em] text-muted-foreground transition-colors hover:text-ink"
-                  aria-label="Go back to literature check"
+                  aria-label="Go back to protocol sources"
                 >
                   <ArrowRight className="h-4 w-4 rotate-180 transition-transform group-hover:-translate-x-0.5" strokeWidth={1.75} />
-                  Back to literature
+                  Back to protocol sources
                 </button>
                 <span aria-hidden className="hidden h-4 w-px bg-rule sm:block" />
                 <p className="hidden font-mono-notebook text-[12px] uppercase tracking-[0.2em] text-muted-foreground sm:block">
@@ -1925,7 +1943,7 @@ const ExperimentPlan = () => {
                 className="group h-14 gap-3 rounded-sm bg-ink px-7 text-[15px] font-medium text-paper shadow-[0_8px_24px_-12px_hsl(var(--ink)/0.6)] transition-all hover:bg-ink/90 hover:shadow-[0_10px_28px_-10px_hsl(var(--ink)/0.7)]"
               >
                 <span className="font-mono-notebook text-[10px] uppercase tracking-[0.24em] opacity-70">
-                  Step 04 →
+                  Step 05 →
                 </span>
                 <span className="font-serif-display text-[19px] italic">
                   Review and refine plan

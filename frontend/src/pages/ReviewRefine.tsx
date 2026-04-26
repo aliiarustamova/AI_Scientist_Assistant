@@ -216,7 +216,7 @@ const ReviewRefine = () => {
         <section aria-labelledby="page-title" className="mb-12">
           <p className="font-mono-notebook text-[13px] uppercase tracking-[0.22em] text-muted-foreground">
             <span className="text-primary">●</span>&nbsp;&nbsp;Step{" "}
-            <span className="text-ink">04</span> of 04 — Review &amp; refine
+            <span className="text-ink">05</span> of 05 — Review &amp; refine
           </p>
           <h1
             id="page-title"
@@ -532,7 +532,7 @@ const ReviewRefine = () => {
                   <Check className="h-3.5 w-3.5" strokeWidth={2.5} />
                 </span>
                 <p className="font-mono-notebook text-[12px] uppercase tracking-[0.22em] text-muted-foreground">
-                  Step 04
+                  Step 05
                 </p>
               </div>
               <h3 className="mt-4 font-serif-display text-[26px] leading-tight text-ink">

@@ -66,6 +66,11 @@ _LIST_MARKERS = {
 
 _TAG_RE = re.compile(r"<[^>]+>")
 
+# When ``json.loads`` fails (huge/awkward payload), pull block ``"text"`` values.
+_DRAFT_TEXT_FIELD_RE = re.compile(r'"text"\s*:\s*"((?:[^"\\]|\\.)*)"')
+# Truncated / invalid JSON: string may be missing the closing ``"`.
+_DRAFT_TEXT_FIELD_LOOSE_RE = re.compile(r'"text"\s*:\s*"((?:\\.|[^"])*)', re.DOTALL)
+
 
 def _strip_html(text: str) -> str:
     """protocols.io section fields ship as `<p>Methods</p>`. Strip the tags."""
@@ -74,39 +79,128 @@ def _strip_html(text: str) -> str:
     return _TAG_RE.sub("", text).strip()
 
 
-def parse_draftjs(raw: Optional[str]) -> str:
-    """Convert a DraftJS-format JSON string to plaintext.
+def _unescape_draftjs_json_string(s: str) -> str:
+    return (
+        s.replace("\\n", " ")
+        .replace("\\r", " ")
+        .replace('\\"', '"')
+        .replace("\\\\", "\\")
+    )
 
-    Returns "" if the input is empty, not parseable, or doesn't have the
-    expected `blocks` shape — never raises. The pipeline must keep going
-    even if a single step has malformed body content.
-    """
-    if not raw:
+
+def _draftjs_loose_text_from_string(s: str) -> str:
+    """Best-effort plaintext when full JSON parse is not available."""
+    parts = _DRAFT_TEXT_FIELD_RE.findall(s)
+    if not parts:
+        parts = _DRAFT_TEXT_FIELD_LOOSE_RE.findall(s)
+    if not parts:
         return ""
-    try:
-        obj = json.loads(raw)
-    except (json.JSONDecodeError, TypeError):
-        # Sometimes the field already contains plaintext (older protocols)
-        # or HTML — return it as-is, stripped.
-        return _strip_html(str(raw)).strip()
+    return re.sub(
+        r"\s+",
+        " ",
+        " ".join(_unescape_draftjs_json_string(p) for p in parts),
+    ).strip()
 
-    blocks = obj.get("blocks") if isinstance(obj, dict) else None
-    if not isinstance(blocks, list):
-        return ""
 
+def _get_blocks_list(obj: dict) -> Optional[list]:
+    """Return the Draft.js ``blocks`` array (case-insensitive key)."""
+    for k, v in obj.items():
+        if isinstance(k, str) and k.lower() == "blocks" and isinstance(v, list):
+            return v
+    for v in obj.values():
+        if not isinstance(v, dict):
+            continue
+        for ik, inner in v.items():
+            if isinstance(ik, str) and ik.lower() == "blocks" and isinstance(inner, list):
+                return inner
+    return None
+
+
+def _blocks_to_lines(blocks: list) -> str:
     lines: list[str] = []
     for b in blocks:
         if not isinstance(b, dict):
             continue
-        text = (b.get("text") or "").strip()
+        line = b.get("text")
+        if line is None:
+            continue
+        text = str(line).strip()
         if not text:
             continue
         block_type = b.get("type") or "unstyled"
-        depth = b.get("depth") or 0
-        prefix = _LIST_MARKERS.get(block_type, "")
+        try:
+            depth = int(b.get("depth") or 0)
+        except (TypeError, ValueError):
+            depth = 0
+        prefix = _LIST_MARKERS.get(str(block_type), "")
         indent = "  " * depth if prefix else ""
         lines.append(f"{indent}{prefix}{text}")
     return "\n".join(lines)
+
+
+def _draftjs_from_parsed_object(obj: Any) -> str:
+    if isinstance(obj, str):
+        return _string_to_draftjs_plain(obj)
+    if isinstance(obj, list):
+        if not obj:
+            return ""
+        if all(isinstance(b, dict) and ("text" in b or "type" in b) for b in obj):
+            return _blocks_to_lines(obj)
+        if len(obj) == 1:
+            return parse_draftjs(obj[0])
+        return "\n\n".join(parse_draftjs(x) for x in obj)
+    if not isinstance(obj, dict):
+        return ""
+    blocks = _get_blocks_list(obj)
+    if isinstance(blocks, list):
+        return _blocks_to_lines(blocks)
+    return ""
+
+
+def _string_to_draftjs_plain(s: str) -> str:
+    s = s.strip().replace("\ufeff", "")
+    if not s:
+        return ""
+    tl = s.lstrip()
+    if not (tl.startswith(("{", "[")) or "blocks" in s or '"text"' in s):
+        return _strip_html(s).strip()
+    try:
+        obj = json.loads(s)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        loose = _draftjs_loose_text_from_string(s)
+        if loose:
+            return re.sub(r"\s+", " ", loose).strip()
+        tl2 = s.lstrip()
+        if (tl2.startswith("{") and '"blocks"' in s) or (tl2.startswith("[") and '"blocks"' in s):
+            return ""
+        return _strip_html(s).strip()
+    return _draftjs_from_parsed_object(obj)
+
+
+def parse_draftjs(raw: Any) -> str:
+    """Convert a Draft.js JSON string, dict, or list to plaintext.
+
+    protocols.io may return ``description`` as a JSON *string* (valid Draft.js),
+    a pre-parsed dict, or (rarely) malformed text that is still recognizably
+    Draft. Never raises.
+
+    * ``/protocol-sources`` and this pipeline use the same logic so the UI and
+    LLM see matching plaintext.
+    """
+    if raw is None:
+        return ""
+    if isinstance(raw, (bytes, bytearray)):
+        try:
+            raw = raw.decode("utf-8", errors="replace")
+        except Exception:
+            return ""
+    if isinstance(raw, str):
+        return _string_to_draftjs_plain(raw)
+    if isinstance(raw, list):
+        return _draftjs_from_parsed_object(raw)
+    if isinstance(raw, dict):
+        return _draftjs_from_parsed_object(raw)
+    return _strip_html(str(raw)).strip()
 
 
 # ---------------------------------------------------------------------------

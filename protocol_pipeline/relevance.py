@@ -25,6 +25,7 @@ from typing import NamedTuple
 from src.clients import llm
 from src.types import Hypothesis
 
+from .hypothesis_context import append_user_constraints
 from .sources import NormalizedProtocol
 
 
@@ -82,7 +83,7 @@ RELEVANCE_USER_TMPL = """Hypothesis (structured):
 - Research question: {research_question}
 
 Source protocols ({n}):
-{sources}"""
+{sources}{user_constraints_suffix}"""
 
 
 def _format_source(p: NormalizedProtocol, *, max_steps: int = 5, max_step_chars: int = 250) -> str:
@@ -129,6 +130,7 @@ def score_protocols(
         research_question=s.research_question,
         n=len(protocols),
         sources=sources_blob,
+        user_constraints_suffix=append_user_constraints(hypothesis),
     )
 
     parsed = llm.complete_json(RELEVANCE_SYSTEM, user, agent_name="Relevance filter")

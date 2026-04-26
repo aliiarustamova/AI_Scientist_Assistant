@@ -46,6 +46,8 @@ class Hypothesis(BaseModel):
     id: str
     structured: StructuredHypothesis
     domain: Optional[str] = None
+    """Free-text lab constraints from the Protocol sources step (equipment, time, etc.)."""
+    user_constraints: Optional[str] = None
     created_at: str = Field(default_factory=now)
 
 
@@ -54,10 +56,18 @@ class Hypothesis(BaseModel):
 NoveltySignal = Literal["novel", "similar_work_exists", "exact_match_found"]
 
 
+class KeyDifference(BaseModel):
+    """Concise axis where the user's hypothesis diverges from prior work."""
+    matched_on: str
+    yours: str
+    prior: str
+
+
 class LitReviewOutput(BaseModel):
     signal: NoveltySignal
     description: str
     references: list[Citation] = Field(max_length=3)
+    key_differences: list[KeyDifference] = Field(default_factory=list, max_length=3)
     searched_at: str
     tavily_query: str
     summary: str  # 3-4 sentence wrap-up at the bottom; LLM-generated. STRICT length cap.

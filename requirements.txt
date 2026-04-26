@@ -9,6 +9,7 @@ anthropic>=0.34
 # API server (Stage 1 endpoint for the FE)
 flask>=3.0
 flask-cors>=4.0
+requests>=2.31.0
 
 # Tests
 pytest>=8.0

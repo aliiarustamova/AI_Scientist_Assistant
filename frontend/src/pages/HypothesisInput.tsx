@@ -1,11 +1,14 @@
-import { useMemo, useState, type KeyboardEvent } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useEffect, useMemo, useState } from "react";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { ArrowRight, FlaskConical, Pencil, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { postParseHypothesis } from "@/lib/api";
 
 type StructuredHypothesis = {
+  /** Set by API parse; used on the literature page as the main recap line. */
+  research_question?: string;
   subject: string;
   independent: string;
   dependent: string;
@@ -14,6 +17,7 @@ type StructuredHypothesis = {
 };
 
 const EMPTY: StructuredHypothesis = {
+  research_question: "",
   subject: "",
   independent: "",
   dependent: "",
@@ -22,6 +26,7 @@ const EMPTY: StructuredHypothesis = {
 };
 
 const PLACEHOLDERS: StructuredHypothesis = {
+  research_question: "e.g. Does glucose level affect growth rate in E. coli under M9 at 37 °C?",
   subject: "e.g. E. coli K-12 MG1655",
   independent: "e.g. Glucose concentration (0–25 mM)",
   dependent: "e.g. Specific growth rate µ (h⁻¹)",
@@ -29,7 +34,9 @@ const PLACEHOLDERS: StructuredHypothesis = {
   expected: "e.g. Inverse, saturating relationship above 10 mM",
 };
 
-const PLACEHOLDER_PROMPT = `We hypothesize that increasing glucose concentration in M9 minimal media will reduce the specific growth rate of E. coli K-12 above 10 mM, due to catabolite repression of alternative carbon utilization pathways under aerobic conditions at 37 °C.`;
+// Short invite — the old long E. coli example read like prefilled text; keep the field empty-looking.
+const PLACEHOLDER_PROMPT =
+  "Write your hypothesis here in plain language — a rough sentence or two is enough. You’ll refine the structure in the next panel.";
 
 const FIELD_LABELS: Array<{ key: keyof StructuredHypothesis; label: string; hint: string }> = [
   { key: "subject", label: "Subject", hint: "Organism, system, or material under study" },
@@ -40,37 +47,73 @@ const FIELD_LABELS: Array<{ key: keyof StructuredHypothesis; label: string; hint
 ];
 
 /**
- * Mock parser. Step 1 only — no LLM. Pulls obvious fragments out of the prose
- * so the right panel feels alive when the user clicks "Parse".
+ * Frontend-only parser (no LLM call).
+ * Extracts structured fields from common scientific hypothesis phrasing.
  */
 function mockParse(text: string): StructuredHypothesis {
-  const t = text.trim();
-  if (!t) return EMPTY;
+  const t = text.replace(/\s+/g, " ").trim();
+  if (!t) return { ...EMPTY };
 
   const lower = t.toLowerCase();
-  const grab = (re: RegExp) => {
-    const m = t.match(re);
-    return m ? m[1].trim().replace(/[.,;]+$/, "") : "";
+  const clean = (s: string) => s.trim().replace(/[.,;:]+$/, "");
+  const sentence = t.split(/[.!?]/).map((s) => s.trim()).find(Boolean) ?? t;
+
+  const firstMatch = (patterns: RegExp[]): string => {
+    for (const re of patterns) {
+      const m = t.match(re);
+      if (m?.[1]) return clean(m[1]);
+    }
+    return "";
   };
 
-  const subject = grab(/(?:of|in|on)\s+([A-Z][\w.\- ]+?(?:\s+[A-Z0-9][\w.\-]*)*)/);
-  const independent = grab(/(?:increasing|decreasing|varying|changing)\s+([\w\s\-()]+?)(?:\s+(?:will|on|in|for|reduces?|increases?))/i);
-  const dependent = grab(/(?:reduce|increase|affect|change)s?\s+(?:the\s+)?([\w\s\-()]+?)(?:\s+(?:of|above|below|when|under|due))/i);
-  const conditions = grab(/(?:under|at|in)\s+([\w\-,°.\s]+?(?:conditions?|media|°\s?C|environment))/i);
-  const expected = lower.includes("inverse")
-    ? "Inverse relationship between the two variables"
-    : lower.includes("increase")
-      ? "Positive correlation expected"
-      : lower.includes("reduce") || lower.includes("decrease")
-        ? "Negative correlation expected"
-        : "";
+  // What is being manipulated?
+  const independent = firstMatch([
+    /(?:increasing|decreasing|varying|changing)\s+(.+?)(?:\s+(?:will|may|can|is|are|reduces?|increases?|affects?|changes?)\b)/i,
+    /(?:effect|impact|influence)\s+of\s+(.+?)(?:\s+on\b)/i,
+  ]);
+
+  // What is being measured?
+  const dependent = firstMatch([
+    /(?:reduces?|decreases?|increases?|affects?|changes?|improves?|impairs?)\s+(?:the\s+)?(.+?)(?:\s+(?:in|of|above|below|under|when|due to)\b|$)/i,
+    /(?:effect|impact|influence)\s+of\s+.+?\s+on\s+(.+?)(?:\s+(?:in|of|under|when)\b|$)/i,
+  ]);
+
+  // Which organism/system/material?
+  const subject = firstMatch([
+    /(?:in|of|on)\s+([A-Za-z0-9.\-()\/ ]+?)(?:\s+(?:under|at|with|during|when|using|will|may|can|reduces?|increases?|affects?)\b|$)/i,
+    /(?:in|using)\s+(?:the\s+)?([A-Za-z0-9.\-()\/ ]+?)(?:\s+(?:model|system|cells?|strain|culture)\b)/i,
+  ]);
+
+  // Experimental context / constraints.
+  const conditionMatches = Array.from(
+    t.matchAll(
+      /\b(?:under|at|during|while|with|without|in)\s+([^.;,]+?(?:conditions?|media|environment|temperature|ph|rpm|oxygen|aerobic|anaerobic|°\s?c|celsius|incubator|culture|time|hours?|minutes?|days?)[^.;,]*)/gi
+    )
+  ).map((m) => clean(m[1]));
+  const conditions = conditionMatches.join("; ");
+
+  // Expected direction/result.
+  const expected = firstMatch([
+    /(?:we\s+)?(?:expect|predict|hypothesi[sz]e)\s+(?:that\s+)?(.+?)(?:$|[.;])/i,
+    /(?:will|should|may|is expected to)\s+(.+?)(?:$|[.;])/i,
+  ]);
+
+  // Fallback directional summary if no explicit expectation clause exists.
+  const directionalFallback =
+    expected ||
+    (/\b(increase|improve|enhance|raise)\b/i.test(lower)
+      ? "Positive effect is expected."
+      : /\b(decrease|reduce|impair|lower)\b/i.test(lower)
+        ? "Negative effect is expected."
+        : "");
 
   return {
-    subject: subject || "",
-    independent: independent || "",
-    dependent: dependent || "",
-    conditions: conditions || "",
-    expected,
+    research_question: "",
+    subject: subject || clean(sentence),
+    independent,
+    dependent,
+    conditions,
+    expected: directionalFallback,
   };
 }
 
@@ -84,9 +127,28 @@ function todayLabel() {
 
 const HypothesisInput = () => {
   const navigate = useNavigate();
+  const location = useLocation();
   const [prose, setProse] = useState("");
   const [structured, setStructured] = useState<StructuredHypothesis>(EMPTY);
   const [parsed, setParsed] = useState(false);
+  const [isParsing, setIsParsing] = useState(false);
+  const [parseError, setParseError] = useState<string | null>(null);
+
+  // e.g. return from literature step with { structured } in route state
+  useEffect(() => {
+    const raw = (location.state as { structured?: Partial<StructuredHypothesis> } | null)
+      ?.structured;
+    if (!raw) return;
+    setStructured({
+      research_question: raw.research_question ?? "",
+      subject: raw.subject ?? "",
+      independent: raw.independent ?? "",
+      dependent: raw.dependent ?? "",
+      conditions: raw.conditions ?? "",
+      expected: raw.expected ?? "",
+    });
+    setParsed(true);
+  }, [location.key]);
 
   const wordCount = useMemo(
     () => (prose.trim() ? prose.trim().split(/\s+/).length : 0),
@@ -98,15 +160,33 @@ const HypothesisInput = () => {
     [structured],
   );
 
-  const handleParse = () => {
-    setStructured(mockParse(prose));
-    setParsed(true);
-  };
-
-  const handleProseKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
-      e.preventDefault();
-      handleParse();
+  const handleParse = async () => {
+    const text = prose.trim();
+    if (!text) return;
+    setIsParsing(true);
+    setParseError(null);
+    try {
+      const res = await postParseHypothesis({ text });
+      setStructured({
+        research_question: res.structured.research_question ?? "",
+        subject: res.structured.subject,
+        independent: res.structured.independent,
+        dependent: res.structured.dependent,
+        conditions: res.structured.conditions,
+        expected: res.structured.expected,
+      });
+      setParsed(true);
+    } catch (err) {
+      // Fallback keeps the UI usable if backend/LLM is down.
+      setStructured(mockParse(text));
+      setParsed(true);
+      setParseError(
+        err instanceof Error
+          ? `Using fallback parser: ${err.message}`
+          : "Using fallback parser due to a parsing error.",
+      );
+    } finally {
+      setIsParsing(false);
     }
   };
 
@@ -175,7 +255,7 @@ const HypothesisInput = () => {
           <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
             <div>
               <p className="font-mono-notebook text-[13px] uppercase tracking-[0.22em] text-muted-foreground">
-                <span className="text-primary">●</span>&nbsp;&nbsp;New entry · Step <span className="text-ink">01</span> of 04
+                <span className="text-primary">●</span>&nbsp;&nbsp;New entry · Step <span className="text-ink">01</span> of 05
               </p>
               <h1
                 id="page-title"
@@ -219,7 +299,6 @@ const HypothesisInput = () => {
               <Textarea
                 value={prose}
                 onChange={(e) => setProse(e.target.value)}
-                onKeyDown={handleProseKeyDown}
                 placeholder={PLACEHOLDER_PROMPT}
                 aria-label="Hypothesis prose"
                 className="ruled-paper min-h-[400px] flex-1 resize-none border-0 bg-transparent px-0 py-0 text-[22px] leading-[1.85rem] text-ink shadow-none placeholder:text-muted-foreground/70 focus-visible:ring-0 focus-visible:ring-offset-0"
@@ -228,18 +307,24 @@ const HypothesisInput = () => {
             </div>
 
             <footer className="flex flex-col-reverse items-start justify-between gap-3 border-t border-rule px-7 py-5 sm:flex-row sm:items-center">
-              <p className="font-mono-notebook text-[13px] uppercase tracking-[0.2em] text-muted-foreground">
-                ⌘ + Enter to parse
-              </p>
               <Button
                 onClick={handleParse}
-                disabled={!prose.trim()}
+                disabled={!prose.trim() || isParsing}
                 className="h-11 gap-2 rounded-sm bg-primary px-6 text-[14px] font-medium text-primary-foreground hover:bg-primary/90"
               >
                 <Sparkles className="h-4 w-4" strokeWidth={2} />
-                {parsed ? "Re-parse hypothesis" : "Parse hypothesis"}
+                {isParsing
+                  ? "Parsing hypothesis..."
+                  : parsed
+                    ? "Re-parse hypothesis"
+                    : "Parse hypothesis"}
               </Button>
             </footer>
+            {parseError && (
+              <p className="px-7 pb-4 text-[12px] leading-[1.5] text-[hsl(var(--destructive))]">
+                {parseError}
+              </p>
+            )}
           </section>
 
           {/* Structured panel — active control surface */}
@@ -463,6 +548,7 @@ const HypothesisInput = () => {
                 // ("Does X affect Y in Z under conditions?") rather than
                 // adding another input.
                 const research_question =
+                  structured.research_question?.trim() ||
                   `Does ${structured.independent || "the intervention"} affect ` +
                   `${structured.dependent || "the outcome"} in ` +
                   `${structured.subject || "the system"}` +

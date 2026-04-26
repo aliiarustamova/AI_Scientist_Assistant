@@ -51,6 +51,15 @@ const ROUTE_CONTEXT: Record<string, RouteContext> = {
       "What gaps exist in the literature?",
     ],
   },
+  "/protocol-sources": {
+    label: "Protocol sources",
+    subtitle: "Ask about which protocols to ground the plan in",
+    suggestions: [
+      "Which protocol is closest to my setup?",
+      "How do I balance cost vs accuracy here?",
+      "What should I add to constraints?",
+    ],
+  },
   "/plan": {
     label: "Experiment plan",
     subtitle: "Ask about the protocol, materials, or design",

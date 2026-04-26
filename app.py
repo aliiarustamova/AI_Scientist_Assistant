@@ -27,6 +27,7 @@ import json
 import os
 import re
 import sys
+from datetime import datetime, timezone
 import traceback
 import uuid
 
@@ -62,6 +63,7 @@ from protocol_pipeline.frontend_view import (  # noqa: E402
     adapt_materials,
     adapt_protocol,
 )
+from protocol_pipeline.sources import parse_draftjs  # noqa: E402
 
 
 app = Flask(__name__)
@@ -222,6 +224,30 @@ def lit_review():
 # Stage 2 / 3 helpers
 # ---------------------------------------------------------------------------
 
+
+def _coerce_user_constraints(body: dict) -> str | None:
+    """Extract optional researcher constraints; accepts ``user_constraints`` or ``constraints``."""
+    raw = body.get("user_constraints")
+    if raw is None:
+        raw = body.get("constraints")
+    if raw is None:
+        return None
+    s = str(raw).strip()
+    return s or None
+
+
+def _merge_user_constraints_onto_plan(plan: ExperimentPlan, body: dict) -> bool:
+    """If the request body carries constraints, update ``plan.hypothesis.user_constraints``."""
+    if "user_constraints" not in body and "constraints" not in body:
+        return False
+    uc = _coerce_user_constraints(body)
+    h = plan.hypothesis
+    if h.user_constraints == uc:
+        return False
+    plan.hypothesis = h.model_copy(update={"user_constraints": uc})
+    return True
+
+
 def _resolve_plan(body: dict) -> tuple[ExperimentPlan, bool]:
     """Either load an existing plan via `plan_id` or mint a new one from a
     `structured` hypothesis. Returns (plan, is_new). Raises ValueError on
@@ -246,6 +272,7 @@ def _resolve_plan(body: dict) -> tuple[ExperimentPlan, bool]:
                 id=f"hyp_{uuid.uuid4().hex[:12]}",
                 structured=structured,
                 domain=body.get("domain"),
+                user_constraints=_coerce_user_constraints(body),
             )
         plan = plan_lib.create_plan(hypothesis, model_id=llm.model_id())
         plan_lib.save_plan(plan)
@@ -281,13 +308,16 @@ def protocol():
     Request body — either form is accepted:
 
       Form A (chain off /lit-review):
-        { "plan_id": "plan_abc..." }
+        { "plan_id": "plan_abc...",
+          "user_constraints": "e.g. only equipment in lab, time limits"  // optional
+        }
 
       Form B (start fresh; mostly for curl testing):
         {
           "structured": { research_question, subject, independent,
                           dependent, conditions, expected },
-          "domain": "cell_biology"   // optional
+          "domain": "cell_biology",   // optional
+          "user_constraints": "string"  // optional; same as ``constraints`` alias
         }
 
     Response:
@@ -305,6 +335,10 @@ def protocol():
         return jsonify({"error": "validation_error", "detail": exc.errors()}), 422
     except ValueError as exc:
         return jsonify({"error": "bad_request", "detail": str(exc)}), 400
+
+    if _merge_user_constraints_onto_plan(plan, body):
+        plan.updated_at = now()
+    plan_lib.save_plan(plan)
 
     started = now()
     plan.status["protocol"] = StageStatusRunning(started_at=started)
@@ -335,116 +369,173 @@ def protocol():
 
 PROTOCOLS_IO_BASE = "https://www.protocols.io/api/v3"
 
-# When protocols.io returns Draft.js as a string, ``json.loads`` can fail (size,
-# escapes, minor malformation). Fall back to pulling ``"text"`` fields with regex.
-_DRAFT_TEXT_FIELD_RE = re.compile(r'"text"\s*:\s*"((?:[^"\\]|\\.)*)"')
+# protocols.io v3 Search ignores very common English question words; drop for keyword soup.
+_STOP_QUERY = frozenset({
+    "does", "do", "did", "is", "are", "was", "were", "the", "a", "an", "and", "or", "in", "on", "at", "to", "for",
+    "of", "with", "by", "from", "as", "be", "have", "has", "had", "not", "no", "can", "will", "would", "this",
+    "that", "these", "those", "it", "if", "how", "what", "when", "where", "which", "who", "why", "any",
+})
 
 
-def _draft_plain_from_json_string(s: str) -> str:
-    """Best-effort plain text from a Draft.js JSON string without full parsing."""
-    parts = _DRAFT_TEXT_FIELD_RE.findall(s)
-    if not parts:
-        return ""
-    out: list[str] = []
-    for p in parts:
-        out.append(
-            p.replace("\\n", " ")
-            .replace("\\r", " ")
-            .replace('\\"', '"')
-            .replace("\\\\", "\\")
+def _pio_auth_headers() -> dict[str, str] | None:
+    """Return Authorization header. protocols.io expects ``Bearer <token>`` in most cases."""
+    raw = (os.environ.get("PROTOCOLS_IO_API_KEY") or os.environ.get("PROTOCOLS_IO_TOKEN") or "").strip()
+    if not raw:
+        return None
+    if raw.lower().startswith("bearer "):
+        return {"Authorization": raw}
+    return {"Authorization": f"Bearer {raw}"}
+
+
+def _search_query_candidates(structured: StructuredHypothesis) -> list[str]:
+    """Build several search keys from research_question and experimental fields (not RQ only)."""
+    rq = (structured.research_question or "").strip()
+    extra = " ".join(
+        x.strip()
+        for x in (
+            structured.subject,
+            structured.independent,
+            structured.dependent,
+            structured.conditions,
+            structured.expected,
         )
-    return " ".join(out)
+        if isinstance(x, str) and x.strip()
+    )
+    blob = f"{rq} {extra}".strip()
+    alnum_toks = re.findall(r"[A-Za-z][A-Za-z0-9+.\-]*", blob)
+    kws = [t for t in alnum_toks if len(t) > 2 and t.lower() not in _STOP_QUERY]
+    wlist = rq.split()
+    out: list[str] = []
+    seen: set[str] = set()
+
+    def add(s: str) -> None:
+        s = s.strip()
+        if len(s) < 2 or s in seen:
+            return
+        if len(s) > 200:
+            s = s[:200]
+        seen.add(s)
+        out.append(s)
+
+    if extra and extra != rq:
+        add(extra[:180])
+    if kws:
+        add(" ".join(kws[:12]))
+        add(" ".join(kws[:6]))
+    if rq:
+        add(rq)
+        if wlist:
+            add(" ".join(wlist[:8]))
+            add(" ".join(wlist[:4]))
+            add(max(wlist, key=len))
+    if not out and extra:
+        add(extra)
+    return out[:14]
 
 
-def _first_draft_value(item: dict) -> object:
-    """protocols.io may put Draft content under several keys; use the first non-empty."""
-    for k in ("description", "abstract", "guidelines", "before_start", "materials_text", "warning"):
-        v = item.get(k)
-        if v is None:
-            continue
-        if isinstance(v, str) and v.strip():
-            return v
-        if isinstance(v, dict) and v:
-            return v
-    return ""
-
-
-def _flatten_draft_to_plain(s: str) -> str:
-    """Parse Draft JSON (or string that still looks like Draft after a failed pass)."""
-    t = s.strip()
-    if not t or ("blocks" not in t and "Blocks" not in t):
-        return t
-    if t.lstrip().startswith("{"):
+def _pio_items_from_response(data: object) -> list[dict] | None:
+    """Return item list if the payload looks like a successful hit."""
+    if not isinstance(data, dict):
+        return None
+    sc = data.get("status_code")
+    if sc is not None:
         try:
-            parsed = json.loads(t)
-        except (json.JSONDecodeError, TypeError, ValueError):
-            plain = _draft_plain_from_json_string(t)
-            return plain if plain.strip() else t
-        return extract_text(parsed)
-    if t.lstrip().startswith("["):
-        try:
-            arr = json.loads(t)
-        except (json.JSONDecodeError, TypeError, ValueError):
-            return _draft_plain_from_json_string(t) or t
-        if isinstance(arr, list) and arr:
-            return extract_text(arr[0])
-    return _draft_plain_from_json_string(t) or t
+            if int(sc) != 0:
+                return None
+        except (TypeError, ValueError):
+            return None
+    items = data.get("items")
+    if not isinstance(items, list) or not items:
+        return None
+    return [x for x in items if isinstance(x, dict)]
 
 
-def _coerce_plain_summary(text: str, raw: object) -> str:
-    """Ensure card summary is human text, not a Draft.js JSON string."""
-    t = (text or "").strip().replace("\ufeff", "")
-    tl = t.lstrip()
-    is_draft = (tl.startswith("{") and '"blocks"' in t) or (tl.startswith("[") and '"blocks"' in t)
-    if t and not is_draft:
-        return t
-    if isinstance(raw, str) and '"blocks"' in raw:
-        p = _draft_plain_from_json_string(raw)
-        if p.strip():
-            return p
-    if t:
-        p = _flatten_draft_to_plain(t)
-        if p.strip():
-            return p
-        p2 = _draft_plain_from_json_string(t)
-        if p2.strip():
-            return p2
-    if isinstance(raw, (dict, list)):
-        p = extract_text(raw)
-        if p.strip():
-            return p
-    return t
-
-
-def extract_text(desc: object) -> str:
-    """Strip Draft.js JSON from protocols.io ``description`` into plain text."""
-    if desc is None:
-        return ""
-    if isinstance(desc, dict) and "blocks" in desc:
-        blocks = desc.get("blocks")
-        if isinstance(blocks, list):
-            return " ".join(
-                (b.get("text", "") if isinstance(b, dict) else "") for b in blocks
-            )
-        return ""
-    if isinstance(desc, str):
-        s = desc.strip()
-        if not s:
-            return ""
-        if "blocks" in s and s.lstrip().startswith("{"):
-            try:
-                return extract_text(json.loads(s))
-            except (json.JSONDecodeError, TypeError, ValueError):
-                plain = _draft_plain_from_json_string(s)
-                if plain.strip():
-                    return plain
-                p2 = _flatten_draft_to_plain(s)
-                if p2.strip() and not (
-                    p2.lstrip().startswith("{") and '"blocks"' in p2
-                ):
-                    return p2
+def _normalize_pio_doi(raw: object) -> str | None:
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    s = raw.strip()
+    for prefix in (
+        "https://doi.org/",
+        "http://doi.org/",
+        "https://dx.doi.org/",
+        "http://dx.doi.org/",
+        "dx.doi.org/",
+    ):
+        if s.lower().startswith(prefix.lower()):
+            s = s[len(prefix) :]
+            break
+    s = s.strip().lstrip("/")
+    if s.startswith("10."):
         return s
-    return str(desc) if desc else ""
+    return None
+
+
+def _pio_author_cite(item: dict) -> str | None:
+    names: list[str] = []
+    authors = item.get("authors")
+    if isinstance(authors, list):
+        for a in authors:
+            if isinstance(a, dict):
+                n = a.get("name")
+                if isinstance(n, str) and n.strip():
+                    names.append(n.strip())
+    if not names:
+        c = item.get("creator")
+        if isinstance(c, dict):
+            n = c.get("name")
+            if isinstance(n, str) and n.strip():
+                names.append(n.strip())
+    if not names:
+        return None
+    if len(names) == 1:
+        return names[0]
+    if len(names) == 2:
+        return f"{names[0]} & {names[1]}"
+    return f"{names[0]} et al."
+
+
+def _pio_year(item: dict) -> str | None:
+    for key in ("published_on", "created_on"):
+        ts = item.get(key)
+        if ts is None:
+            continue
+        try:
+            return str(datetime.fromtimestamp(int(ts), tz=timezone.utc).year)
+        except (ValueError, TypeError, OSError, OverflowError):
+            continue
+    return None
+
+
+def _build_pio_citation(item: dict, pio_url: str | None) -> str:
+    """One-line attribution for the card (authors, year, title, venue, DOI or URL)."""
+    author = _pio_author_cite(item)
+    doi = _normalize_pio_doi(item.get("doi"))
+    year = _pio_year(item)
+    title = item.get("title")
+    title_s = (title.strip() if isinstance(title, str) else "") or ""
+    if len(title_s) > 90:
+        title_s = title_s[:87] + "…"
+
+    head_parts: list[str] = []
+    if author:
+        head_parts.append(author)
+    if year:
+        head_parts.append(f"({year})")
+    if title_s:
+        head_parts.append(f"“{title_s}”")
+
+    head = " ".join(head_parts) if head_parts else ""
+
+    if doi:
+        tail = f"protocols.io. https://doi.org/{doi}"
+    elif pio_url:
+        tail = f"protocols.io. {pio_url}"
+    else:
+        tail = "protocols.io"
+
+    if head:
+        return f"{head}. {tail}"
+    return tail
 
 
 def normalize_protocols(data: dict, fetch_mode: str) -> dict:
@@ -455,18 +546,25 @@ def normalize_protocols(data: dict, fetch_mode: str) -> dict:
             continue
         if item.get("id") is None:
             continue
-        raw = _first_draft_value(item)
-        text = _coerce_plain_summary(extract_text(raw), raw)
+        # protocols.io description is often Draft.js JSON (string or dict); use shared parser.
+        raw_text = parse_draftjs(item.get("description"))
+        text = " ".join((raw_text or "").split())
         summary = text[:300] + ("..." if len(text) > 300 else "")
-        protocols.append(
-            {
-                "id": str(item.get("id")),
-                "title": item.get("title") or "Untitled protocol",
-                "source": "protocols.io",
-                "summary": summary,
-                "keySteps": ["Open full protocol for steps"],
-            },
-        )
+        raw_u = item.get("url")
+        pio_url = raw_u.strip() if isinstance(raw_u, str) else None
+        if not pio_url and item.get("uri"):
+            pio_url = f"https://www.protocols.io/view/{item.get('uri')}"
+        row: dict = {
+            "id": str(item.get("id")),
+            "title": item.get("title") or "Untitled protocol",
+            "source": "protocols.io",
+            "summary": summary,
+            "keySteps": [],
+            "citation": _build_pio_citation(item, pio_url),
+        }
+        if pio_url:
+            row["url"] = pio_url
+        protocols.append(row)
     return {
         "sources": protocols,
         "fetch_mode": fetch_mode,
@@ -479,40 +577,31 @@ def fetch_protocols_from_protocols_io(
     search_key: str | None = None,
 ) -> tuple[list[dict], str]:
     """GET protocols.io public search, then latest publications. Debug-print each request."""
-    token = (os.environ.get("PROTOCOLS_IO_API_KEY") or os.environ.get("PROTOCOLS_IO_TOKEN") or "").strip()
-    if not token:
+    headers = _pio_auth_headers()
+    if not headers:
         return [], "missing_credentials"
 
-    headers = {"Authorization": token}
-
-    rq = (search_key or structured.research_question or "").strip()
-    words = rq.split()
-    query_candidates = [
-        rq,
-        " ".join(words[:4]),
-        words[0] if words else "",
-        max(words, key=len) if words else "",
-    ]
-    seen_q: set[str] = set()
-    unique_candidates: list[str] = []
-    for c in query_candidates:
-        c = c.strip()
-        if len(c) < 1 or c in seen_q:
-            continue
-        seen_q.add(c)
-        unique_candidates.append(c)
+    unique_candidates = _search_query_candidates(structured)
+    if search_key and str(search_key).strip():
+        sk = str(search_key).strip()[:200]
+        if sk not in unique_candidates:
+            unique_candidates.insert(0, sk)
 
     search_url = f"{PROTOCOLS_IO_BASE}/protocols"
+    base_search_params = {
+        "filter": "public",
+        "order_field": "activity",
+        "order_dir": "desc",
+        "page_size": "20",
+        "page_id": "1",
+    }
     for q in unique_candidates:
-        params = {
-            "filter": "public",
-            "key": q,
-            "order_field": "activity",
-            "order_dir": "desc",
-            "page_size": "20",
-            "page_id": "1",
-        }
-        res = requests.get(search_url, headers=headers, params=params, timeout=45)
+        req_params = {**base_search_params, "key": q}
+        try:
+            res = requests.get(search_url, headers=headers, params=req_params, timeout=45)
+        except requests.RequestException as exc:
+            print("QUERY:", q, "REQUEST_ERR:", exc)
+            continue
         print("QUERY:", q)
         print("STATUS:", res.status_code)
         print("RAW RESPONSE:", res.text[:500])
@@ -520,15 +609,18 @@ def fetch_protocols_from_protocols_io(
             data = res.json()
         except json.JSONDecodeError:
             continue
-        if not isinstance(data, dict):
-            continue
-        if data.get("items"):
-            out = normalize_protocols(data, fetch_mode="search")
+        items = _pio_items_from_response(data)
+        if items:
+            out = normalize_protocols({"items": items}, fetch_mode="search")
             return out["sources"], out["fetch_mode"]
 
     pub_url = f"{PROTOCOLS_IO_BASE}/publications"
-    pub_params = {"latest": 10}
-    res = requests.get(pub_url, headers=headers, params=pub_params, timeout=45)
+    pub_params = {"latest": 20}
+    try:
+        res = requests.get(pub_url, headers=headers, params=pub_params, timeout=45)
+    except requests.RequestException as exc:
+        print("QUERY:", "publications_fallback", pub_params, "REQUEST_ERR:", exc)
+        return [], "empty"
     print("QUERY:", "publications_fallback", pub_params)
     print("STATUS:", res.status_code)
     print("RAW RESPONSE:", res.text[:500])
@@ -536,10 +628,9 @@ def fetch_protocols_from_protocols_io(
         data = res.json()
     except json.JSONDecodeError:
         return [], "empty"
-    if not isinstance(data, dict):
-        return [], "empty"
-    if data.get("items"):
-        out = normalize_protocols(data, fetch_mode="publications_fallback")
+    items = _pio_items_from_response(data)
+    if items:
+        out = normalize_protocols({"items": items}, fetch_mode="publications_fallback")
         return out["sources"], out["fetch_mode"]
     return [], "empty"
 
@@ -552,7 +643,7 @@ def protocol_sources():
       { "structured": { research_question, subject, ... } }
 
     Response:
-      { "sources": [ { id, title, source, summary, keySteps } ] }
+      { "sources": [ { id, title, source, summary, keySteps, citation, url? } ] }
     """
     body = request.get_json(silent=True) or {}
     raw_structured = body.get("structured")

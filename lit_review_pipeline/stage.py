@@ -34,6 +34,7 @@ from src.types import (
     Citation,
     ExperimentPlan,
     Hypothesis,
+    KeyDifference,
     LitReviewOutput,
     LitReviewSession,
     NoveltySignal,
@@ -78,6 +79,10 @@ Editorial output per chosen reference:
 Top-level output:
 - signal       ("novel" — no close prior work | "similar_work_exists" — related but not identical | "exact_match_found" — this exact experiment has been published)
 - description  (2-3 sentences explaining the signal classification candidly)
+- key_differences (0-3 items. Each item must be an explicit comparison axis with fields:
+  - matched_on: short axis label (e.g. "Culture mode", "Readout", "Model system")
+  - yours: what the user's hypothesis does
+  - prior: what prior literature did)
 - summary      (HARD LIMIT: EXACTLY 3 OR 4 SENTENCES. Holistic wrap-up for the researcher: novelty assessment, key literature takeaway, what gap the hypothesis fills or what to read first. Plain prose, no markdown, no "in summary" phrasing.)
 
 Selection rules:
@@ -96,6 +101,13 @@ Return ONLY a single valid JSON object:
       "matched_on": ["string"],
       "description": "string",
       "importance": "string"
+    }
+  ],
+  "key_differences": [
+    {
+      "matched_on": "string",
+      "yours": "string",
+      "prior": "string"
     }
   ],
   "summary": "string (3-4 sentences, hard limit)"
@@ -307,7 +319,7 @@ def _classify(
     h: Hypothesis,
     query: str,
     epmc_response: dict,
-) -> tuple[NoveltySignal, str, list[Citation], str]:
+) -> tuple[NoveltySignal, str, list[Citation], list[KeyDifference], str]:
     s = h.structured
     papers: list[dict] = (epmc_response.get("resultList") or {}).get("result") or []
 
@@ -351,6 +363,17 @@ def _classify(
             continue
         refs.append(_compose_citation(papers[idx], r))
 
+    diffs: list[KeyDifference] = []
+    for d in parsed.get("key_differences", [])[:3]:
+        if not isinstance(d, dict):
+            continue
+        matched_on = str(d.get("matched_on") or "").strip()
+        yours = str(d.get("yours") or "").strip()
+        prior = str(d.get("prior") or "").strip()
+        if not matched_on or not yours or not prior:
+            continue
+        diffs.append(KeyDifference(matched_on=matched_on, yours=yours, prior=prior))
+
     # Hard-cap summary to 4 sentences. Prompt asks for 3-4 but the LLM
     # sometimes overshoots; truncating here is deterministic and silent.
     summary = _truncate_to_n_sentences((parsed.get("summary") or "").strip(), n=4)
@@ -360,7 +383,7 @@ def _classify(
     # bioscience samples; "novel" or "exact match" should require evidence).
     signal = parsed.get("signal") or "similar_work_exists"
     description = parsed.get("description") or ""
-    return signal, description, refs, summary
+    return signal, description, refs, diffs, summary
 
 
 def run(plan: ExperimentPlan) -> LitReviewSession:
@@ -370,12 +393,13 @@ def run(plan: ExperimentPlan) -> LitReviewSession:
     # page_size=10 gives the LLM a wider candidate pool; the prompt still
     # caps the chosen references at 3. Worth the marginal token cost.
     epmc_response = europe_pmc.search_for_lit_review(query, page_size=10)
-    signal, description, refs, summary = _classify(h, query, epmc_response)
+    signal, description, refs, diffs, summary = _classify(h, query, epmc_response)
 
     initial = LitReviewOutput(
         signal=signal,
         description=description,
         references=refs,
+        key_differences=diffs,
         searched_at=now(),
         tavily_query=query,  # field name is historical; carries the EPMC query
         summary=summary,
