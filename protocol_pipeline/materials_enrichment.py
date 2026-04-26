@@ -402,45 +402,47 @@ def enrich_one_item(item: FEReagent) -> FEReagent:
 
     Returns a new FEReagent with enrichment fields populated where
     extraction succeeded; original fields unchanged when extraction
-    fails. Never mutates the input."""
+    fails. Never mutates the input.
+
+    Force-backfill: every code path that bails out before applying a
+    verified Tavily extraction now ALSO falls back to the LLM estimate
+    via `_apply_llm_estimate`. The skip-list short-circuits Tavily
+    (so we don't fabricate a SKU on supplier domains for "Writing
+    utensil" or "Questionnaire") but still asks the LLM for a guess —
+    the prompt knows to handle non-procurable items gracefully
+    ("(facility — not procurable)" / "(printable form — internal)").
+    """
     name = (item.name or "").strip()
     if not name or len(name) < 3:
         return item
-    # Skip stationery / paperwork placeholders before paying for the
-    # Tavily call. The LLM has been seen confidently matching
-    # "Writing utensil" to "Sharpie pen #PEN-40" — better to leave
-    # these as TBD than ship a fabricated SKU.
+
+    # Skip stationery / paperwork placeholders BEFORE paying for the
+    # Tavily call (the LLM extractor on Tavily's supplier-domain hits
+    # has been seen confidently matching "Writing utensil" to
+    # "Sharpie pen #PEN-40"). But we still hit the LLM-estimate path
+    # below so the user sees "(printable form — internal)" instead of
+    # blank "—".
     if _is_non_lab_item(name):
-        return item
+        return _apply_llm_estimate(item)
 
     try:
         response = tavily_client.search_for_supplier(name)
     except Exception as exc:
         _LOG.warning("Tavily supplier search failed for %r: %s", name, exc)
-        return item
+        return _apply_llm_estimate(item)
 
     results = response.get("results") if isinstance(response, dict) else None
     if not isinstance(results, list) or not results:
-        return item
+        return _apply_llm_estimate(item)
 
     extracted = _extract_one(name, item.purpose or "", results)
 
-    # Tavily verified path failed. Fall back to a single LLM call for a
-    # best-guess so the FE has SOMETHING to display. Marked as
+    # Tavily verified path failed (no usable source_url). Fall back to
+    # the LLM estimate so the FE has SOMETHING to display. Marked as
     # confidence="estimate" + no source_url so users see a "BEST-GUESS"
     # badge and know it isn't web-verified.
     if not extracted["source_url"]:
-        guess = _llm_estimate(name, item.purpose or "")
-        if not (guess["supplier"] or guess["catalog"] or guess["price"]):
-            return item
-        updates: dict[str, Any] = {"confidence": "estimate"}
-        if guess["supplier"]:
-            updates["supplier"] = guess["supplier"]
-        if guess["catalog"]:
-            updates["catalog"] = guess["catalog"]
-        if guess["price"]:
-            updates["price"] = guess["price"]
-        return item.model_copy(update=updates)
+        return _apply_llm_estimate(item)
 
     # Pass 2: price fallback. Only fire when we have enough to make
     # a focused search (supplier + catalog) AND price is still null.
@@ -499,6 +501,28 @@ Return ONLY a single valid JSON object:
   "catalog": "string | null",
   "price": "string | null"
 }"""
+
+
+def _apply_llm_estimate(item: FEReagent) -> FEReagent:
+    """Run the LLM-estimate fallback and return a model_copy of the
+    item with whatever the LLM produced applied. When the LLM returns
+    all-null (genuinely meaningless input), returns the item unchanged.
+    Centralizes the "force backfill" hook so every bail-out path in
+    enrich_one_item flows through the same fallback."""
+    name = (item.name or "").strip()
+    if not name:
+        return item
+    guess = _llm_estimate(name, item.purpose or "")
+    if not (guess["supplier"] or guess["catalog"] or guess["price"]):
+        return item
+    updates: dict[str, Any] = {"confidence": "estimate"}
+    if guess["supplier"]:
+        updates["supplier"] = guess["supplier"]
+    if guess["catalog"]:
+        updates["catalog"] = guess["catalog"]
+    if guess["price"]:
+        updates["price"] = guess["price"]
+    return item.model_copy(update=updates)
 
 
 def _llm_estimate(name: str, purpose: str) -> dict[str, Optional[str]]:
