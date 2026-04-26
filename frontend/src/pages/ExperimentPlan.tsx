@@ -1554,22 +1554,28 @@ const ExperimentPlan = () => {
                 </div>
 
                 {/* View toggle + PDF download. The download button is
-                    suppressed in mock-only mode (no plan_id to send).
-                    Calls POST /protocol/pdf with plan_id and triggers a
-                    blob download. */}
+                    suppressed in mock-only mode (no plan_id and no
+                    structured hypothesis — nothing to send to the BE).
+                    Otherwise it always shows. Click POSTs the plan_id
+                    we have (apiPlanId preferred — fresh from /protocol;
+                    falls back to incomingPlanId from router state if
+                    the protocol fetch hasn't resolved yet) and
+                    triggers a blob download. Button stays disabled
+                    until at least one plan_id is available. */}
                 <div className="flex shrink-0 flex-col items-end gap-3 self-start">
-                {apiPlanId && (
+                {!useMockData && (
                   <button
                     type="button"
-                    disabled={pdfDownloading}
+                    disabled={pdfDownloading || (!apiPlanId && !incomingPlanId)}
                     onClick={async () => {
-                      if (!apiPlanId || pdfDownloading) return;
+                      const planForPdf = apiPlanId || incomingPlanId;
+                      if (!planForPdf || pdfDownloading) return;
                       setPdfDownloading(true);
                       try {
                         const res = await fetch("/protocol/pdf", {
                           method: "POST",
                           headers: { "Content-Type": "application/json" },
-                          body: JSON.stringify({ plan_id: apiPlanId }),
+                          body: JSON.stringify({ plan_id: planForPdf }),
                         });
                         if (!res.ok) {
                           // Try to surface the JSON error detail; fall back
@@ -1608,7 +1614,11 @@ const ExperimentPlan = () => {
                     className="group inline-flex items-center gap-1.5 border-b border-transparent pb-0.5 font-mono-notebook text-[11px] uppercase tracking-[0.22em] text-ink-soft transition-colors hover:border-ink hover:text-ink disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     <Download className="h-3 w-3" strokeWidth={1.75} />
-                    {pdfDownloading ? "Generating PDF…" : "Download protocol (PDF)"}
+                    {pdfDownloading
+                      ? "Generating PDF…"
+                      : (!apiPlanId && !incomingPlanId)
+                      ? "Preparing PDF…"
+                      : "Download protocol (PDF)"}
                   </button>
                 )}
 
