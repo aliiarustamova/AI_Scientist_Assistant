@@ -1,14 +1,23 @@
-"""Flask API exposing Stage 1 (Lit Review) for the frontend.
+"""Flask API for the AI Scientist FE.
 
 Endpoints:
-  GET  /health           Liveness ping
-  POST /lit-review       Run Stage 1 on a structured hypothesis; return JSON
+  GET  /health      Liveness ping
+  POST /lit-review  Stage 1 (novelty check); persists a plan, returns plan_id
+  POST /protocol    Stage 2 (protocol generation); accepts {plan_id} to chain
+                    off a prior /lit-review, or {structured} for a fresh start
+  POST /materials   Stage 3 (materials roll-up); accepts {plan_id} for chaining
+                    or {structured} (runs /protocol internally first)
 
 Dev:
   python -m flask --app app run --debug --port 5000
 
 Or:
   python app.py
+
+Response shape: every Stage 2/3 response carries both `frontend_view`
+(the shape the existing React mockup consumes) and the full `raw`
+output (rich Pydantic model). Future FE upgrades can switch to `raw`
+without a backend change.
 """
 
 from __future__ import annotations
@@ -36,6 +45,7 @@ from pydantic import ValidationError  # noqa: E402
 from src.clients import llm  # noqa: E402
 from src.lib import plan as plan_lib  # noqa: E402
 from src.types import (  # noqa: E402
+    ExperimentPlan,
     Hypothesis,
     StageStatusComplete,
     StageStatusFailed,
@@ -44,6 +54,11 @@ from src.types import (  # noqa: E402
     now,
 )
 from lit_review_pipeline import stage  # noqa: E402
+from protocol_pipeline import stage as protocol_stage  # noqa: E402
+from protocol_pipeline.frontend_view import (  # noqa: E402
+    adapt_materials,
+    adapt_protocol,
+)
 
 
 app = Flask(__name__)
@@ -220,9 +235,12 @@ def lit_review():
         plan.status["lit_review"] = StageStatusComplete(completed_at=now())
         plan_lib.save_plan(plan)
 
-        # Return just the editorial result for the FE card. Full plan is
-        # persisted to plans/<id>.json on disk for debugging.
-        return jsonify(session.initial_result.model_dump(mode="json"))
+        # Return the editorial result plus the plan_id so the FE can
+        # chain `/protocol` and `/materials` calls against this plan.
+        # Full plan is persisted to plans/<plan_id>.json on disk.
+        payload = session.initial_result.model_dump(mode="json")
+        payload["plan_id"] = plan.id
+        return jsonify(payload)
 
     except Exception as exc:
         # Log the full traceback server-side for debugging, but DO NOT leak
@@ -240,6 +258,200 @@ def lit_review():
             "error": "pipeline_error",
             "detail": "Stage 1 failed. Check server logs for the underlying cause.",
         }), 500
+
+
+# ---------------------------------------------------------------------------
+# Stage 2 / 3 helpers
+# ---------------------------------------------------------------------------
+
+def _resolve_plan(body: dict) -> tuple[ExperimentPlan, bool]:
+    """Either load an existing plan via `plan_id` or mint a new one from a
+    `structured` hypothesis. Returns (plan, is_new). Raises ValueError on
+    bad input — caller turns it into a 400/422.
+
+    Both /protocol and /materials accept either form so the FE can chain
+    off /lit-review (plan_id) AND a curl-based smoke test can hit them
+    without lit-review (structured)."""
+    plan_id = body.get("plan_id")
+    if plan_id:
+        try:
+            return plan_lib.load_plan(str(plan_id)), False
+        except FileNotFoundError as exc:
+            raise ValueError(f"plan_id {plan_id!r} not found on disk") from exc
+
+    if "structured" in body or "id" in body:
+        if "id" in body:
+            hypothesis = Hypothesis(**body)
+        else:
+            structured = StructuredHypothesis(**(body.get("structured") or {}))
+            hypothesis = Hypothesis(
+                id=f"hyp_{uuid.uuid4().hex[:12]}",
+                structured=structured,
+                domain=body.get("domain"),
+            )
+        plan = plan_lib.create_plan(hypothesis, model_id=llm.model_id())
+        plan_lib.save_plan(plan)
+        return plan, True
+
+    raise ValueError("Body must contain either 'plan_id' or 'structured'.")
+
+
+def _stage_failed_response(stage_name: str, plan: ExperimentPlan | None, exc: Exception):
+    """Same pattern as /lit-review: log full traceback server-side, mark
+    the stage failed on the plan if we have one, return a sanitized 500."""
+    traceback.print_exc()
+    try:
+        if plan is not None:
+            plan.status[stage_name] = StageStatusFailed(failed_at=now(), error=str(exc))
+            plan_lib.save_plan(plan)
+    except Exception:
+        pass
+    return jsonify({
+        "error": "pipeline_error",
+        "detail": f"Stage '{stage_name}' failed. Check server logs for the underlying cause.",
+    }), 500
+
+
+# ---------------------------------------------------------------------------
+# POST /protocol
+# ---------------------------------------------------------------------------
+
+@app.post("/protocol")
+def protocol():
+    """Run Stage 2 protocol generation.
+
+    Request body — either form is accepted:
+
+      Form A (chain off /lit-review):
+        { "plan_id": "plan_abc..." }
+
+      Form B (start fresh; mostly for curl testing):
+        {
+          "structured": { research_question, subject, independent,
+                          dependent, conditions, expected },
+          "domain": "cell_biology"   // optional
+        }
+
+    Response:
+        {
+          "plan_id": "...",
+          "frontend_view": FEProtocolView,   // flat steps[], for ExperimentPlan.tsx
+          "raw": ProtocolGenerationOutput    // rich shape, for future FE upgrade
+        }
+    """
+    body = request.get_json(silent=True) or {}
+
+    try:
+        plan, _is_new = _resolve_plan(body)
+    except ValidationError as exc:
+        return jsonify({"error": "validation_error", "detail": exc.errors()}), 422
+    except ValueError as exc:
+        return jsonify({"error": "bad_request", "detail": str(exc)}), 400
+
+    started = now()
+    plan.status["protocol"] = StageStatusRunning(started_at=started)
+    plan.updated_at = started
+    plan_lib.save_plan(plan)
+
+    try:
+        protocol_out, _outline = protocol_stage.run_protocol_only(plan.hypothesis)
+    except Exception as exc:
+        return _stage_failed_response("protocol", plan, exc)
+
+    completed = now()
+    plan.protocol = protocol_out
+    plan.status["protocol"] = StageStatusComplete(completed_at=completed)
+    plan.updated_at = completed
+    plan_lib.save_plan(plan)
+
+    return jsonify({
+        "plan_id": plan.id,
+        "frontend_view": adapt_protocol(protocol_out).model_dump(mode="json"),
+        "raw": protocol_out.model_dump(mode="json"),
+    })
+
+
+# ---------------------------------------------------------------------------
+# POST /materials
+# ---------------------------------------------------------------------------
+
+@app.post("/materials")
+def materials():
+    """Run Stage 3 materials roll-up.
+
+    Request body — either form is accepted:
+
+      Form A (chain off /protocol):
+        { "plan_id": "plan_abc..." }
+        — requires the plan to already have a populated `protocol` field.
+          If it doesn't, returns 400 telling the FE to call /protocol first.
+
+      Form B (start fresh): same shape as /protocol Form B. Internally
+        runs /protocol first, then the roll-up. Slow (~50-70s) but
+        convenient for one-shot curl testing.
+
+    Response:
+        {
+          "plan_id": "...",
+          "frontend_view": FEMaterialsView,   // grouped, for ExperimentPlan.tsx
+          "raw": MaterialsOutput              // flat shape, for future upgrade
+        }
+    """
+    body = request.get_json(silent=True) or {}
+
+    try:
+        plan, is_new = _resolve_plan(body)
+    except ValidationError as exc:
+        return jsonify({"error": "validation_error", "detail": exc.errors()}), 422
+    except ValueError as exc:
+        return jsonify({"error": "bad_request", "detail": str(exc)}), 400
+
+    # If we got a plan_id whose protocol stage hasn't run yet, surface that
+    # explicitly rather than silently re-running it. The FE should call
+    # /protocol first; chaining is sequential by design.
+    if not is_new and plan.protocol is None:
+        return jsonify({
+            "error": "protocol_not_run",
+            "detail": "This plan has no protocol yet. POST /protocol first, then retry /materials.",
+        }), 400
+
+    # Form B: brand-new plan with no protocol yet — run /protocol implicitly.
+    if plan.protocol is None:
+        started = now()
+        plan.status["protocol"] = StageStatusRunning(started_at=started)
+        plan.updated_at = started
+        plan_lib.save_plan(plan)
+        try:
+            protocol_out, _outline = protocol_stage.run_protocol_only(plan.hypothesis)
+        except Exception as exc:
+            return _stage_failed_response("protocol", plan, exc)
+        completed = now()
+        plan.protocol = protocol_out
+        plan.status["protocol"] = StageStatusComplete(completed_at=completed)
+        plan.updated_at = completed
+        plan_lib.save_plan(plan)
+
+    started = now()
+    plan.status["materials"] = StageStatusRunning(started_at=started)
+    plan.updated_at = started
+    plan_lib.save_plan(plan)
+
+    try:
+        materials_out = protocol_stage.run_materials_only(plan.protocol)
+    except Exception as exc:
+        return _stage_failed_response("materials", plan, exc)
+
+    completed = now()
+    plan.materials = materials_out
+    plan.status["materials"] = StageStatusComplete(completed_at=completed)
+    plan.updated_at = completed
+    plan_lib.save_plan(plan)
+
+    return jsonify({
+        "plan_id": plan.id,
+        "frontend_view": adapt_materials(materials_out).model_dump(mode="json"),
+        "raw": materials_out.model_dump(mode="json"),
+    })
 
 
 if __name__ == "__main__":
