@@ -1,4 +1,10 @@
 {
+  "hypothesis": {
+    "text": "Does intracellular trehalose loading improve post-thaw viability of HeLa cells compared with a standard 10% DMSO cryopreservation workflow?",
+    "intervention": "Intracellular trehalose loading before freezing",
+    "measurable_outcome": "Post-thaw viability and 24-hour recovery",
+    "control_implied": "Standard 10% DMSO cryopreservation"
+  },
   "grounding_status": "success",
   "selection_mode": "auto",
   "selected_protocol": {
