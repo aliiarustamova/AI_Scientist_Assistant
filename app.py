@@ -126,18 +126,30 @@ def lit_review():
         return jsonify(session.initial_result.model_dump(mode="json"))
 
     except Exception as exc:
+        # Log the full traceback server-side for debugging, but DO NOT leak
+        # internal exception details to the client. Raw exception strings
+        # can include file paths, library versions, and upstream-service
+        # internals that an attacker could use to fingerprint the deployment.
         traceback.print_exc()
-        # Try to mark the plan as failed if we got that far.
         try:
             if plan is not None:
                 plan.status["lit_review"] = StageStatusFailed(failed_at=now(), error=str(exc))
                 plan_lib.save_plan(plan)
         except Exception:
             pass
-        return jsonify({"error": "pipeline_error", "detail": str(exc)}), 500
+        return jsonify({
+            "error": "pipeline_error",
+            "detail": "Stage 1 failed. Check server logs for the underlying cause.",
+        }), 500
 
 
 if __name__ == "__main__":
+    # Flask's app.run() is for local development only. For deployment
+    # (Render / Railway / Fly / Cloud Run / etc.), run with a production
+    # WSGI server, e.g.:
+    #   gunicorn -b 0.0.0.0:5000 app:app
+    # FLASK_DEBUG defaults to "0" so dropping this onto a server doesn't
+    # accidentally enable the debugger and reloader.
     port = int(os.environ.get("PORT", 5000))
-    debug = os.environ.get("FLASK_DEBUG", "1") == "1"
+    debug = os.environ.get("FLASK_DEBUG", "0") == "1"
     app.run(host="0.0.0.0", port=port, debug=debug)
