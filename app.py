@@ -436,6 +436,85 @@ def timeline():
     })
 
 
+# ---------------------------------------------------------------------------
+# POST /validation
+# ---------------------------------------------------------------------------
+
+@app.post("/validation")
+def validation():
+    """Stage 6: experiment-level validation block.
+
+    Aggregates per-procedure success criteria + controls into experiment-
+    level lists, computes a sample-size estimate from hypothesis.expected
+    (regex-extracted effect size, standard two-sample t-test formula),
+    and runs ONE LLM call for failure modes — each forced to cite a
+    specific procedure or step. Citations the parser can't validate are
+    dropped, so every concern in the output is grounded.
+
+    Same `_resolve_plan` shape as /protocol /materials /timeline.
+
+    Response:
+        {
+          "plan_id": "...",
+          "validation": ValidationOutput   // success_criteria[], controls[],
+                                           //   failure_modes[], power_calculation,
+                                           //   methodology
+        }
+    """
+    body = request.get_json(silent=True) or {}
+
+    try:
+        plan, is_new = _resolve_plan(body)
+    except ValidationError as exc:
+        return jsonify({"error": "validation_error", "detail": exc.errors()}), 422
+    except ValueError as exc:
+        return jsonify({"error": "bad_request", "detail": str(exc)}), 400
+
+    # Same chaining rule as /timeline: a plan_id with no protocol is
+    # an error; new plans run /protocol implicitly.
+    if not is_new and plan.protocol is None:
+        return jsonify({
+            "error": "protocol_not_run",
+            "detail": "This plan has no protocol yet. POST /protocol first, then retry /validation.",
+        }), 400
+
+    if plan.protocol is None:
+        started = now()
+        plan.status["protocol"] = StageStatusRunning(started_at=started)
+        plan.updated_at = started
+        plan_lib.save_plan(plan)
+        try:
+            protocol_out, _outline = protocol_stage.run_protocol_only(plan.hypothesis)
+        except Exception as exc:
+            return _stage_failed_response("protocol", plan, exc)
+        completed = now()
+        plan.protocol = protocol_out
+        plan.status["protocol"] = StageStatusComplete(completed_at=completed)
+        plan.updated_at = completed
+        plan_lib.save_plan(plan)
+
+    started = now()
+    plan.status["validation"] = StageStatusRunning(started_at=started)
+    plan.updated_at = started
+    plan_lib.save_plan(plan)
+
+    try:
+        validation_out = protocol_stage.run_validation_only(plan.hypothesis, plan.protocol)
+    except Exception as exc:
+        return _stage_failed_response("validation", plan, exc)
+
+    completed = now()
+    plan.validation = validation_out
+    plan.status["validation"] = StageStatusComplete(completed_at=completed)
+    plan.updated_at = completed
+    plan_lib.save_plan(plan)
+
+    return jsonify({
+        "plan_id": plan.id,
+        "validation": validation_out.model_dump(mode="json"),
+    })
+
+
 if __name__ == "__main__":
     # Flask's app.run() is for local development only. For deployment
     # (Render / Railway / Fly / Cloud Run / etc.), run with a production

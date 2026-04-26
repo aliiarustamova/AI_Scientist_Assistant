@@ -345,6 +345,87 @@ class TimelineOutput(BaseModel):
     generated_at: str = Field(default_factory=now)
 
 
+# ---- Stage 6: Validation -------------------------------------------------
+# Mix of deterministic + LLM. Deterministic: aggregating procedure-level
+# success criteria + controls into experiment-level lists; extracting
+# effect size from hypothesis.expected via regex; computing n_per_group
+# via the standard two-sample formula. LLM: failure_modes (forced to
+# cite specific procedures/steps so every concern is auditable).
+
+class EffectSize(BaseModel):
+    """Quantitative effect size extracted from the hypothesis (or
+    assumed when explicit values aren't present). `type` values:
+    'cohens_d' | 'percent_change_absolute' | 'percent_change_relative' |
+    'fold_change' | 'odds_ratio' | 'unspecified'."""
+    value: float
+    type: str
+    derived_from: str  # citation, e.g. "hypothesis.expected: '+15 percentage points'"
+
+
+class PowerCalculation(BaseModel):
+    """Standard two-sample power calculation. The formula and every
+    input assumption is surfaced — researchers can audit / re-derive
+    by hand without leaving the page."""
+    statistical_test: str
+    alpha: float                    # typically 0.05
+    power: float                    # typically 0.80
+    effect_size: EffectSize
+    n_per_group: int
+    groups: int
+    total_n: int
+    formula: str                    # plain-English formula description
+    assumptions: list[str] = Field(default_factory=list)
+    rationale: str
+
+
+class SuccessCriterion(BaseModel):
+    """Experiment-level success criterion. Richer than the procedure-
+    level ProcedureSuccessCriterion (adds statistical_test,
+    expected_value). `derived_from` cites the source — procedure
+    name or hypothesis field — so every criterion is auditable."""
+    id: str
+    criterion: str
+    measurement_method: str
+    threshold: str
+    statistical_test: Optional[str] = None
+    expected_value: Optional[str] = None
+    derived_from: str  # "procedure 'Cell Freezing'" | "hypothesis.dependent" | "hypothesis.expected"
+
+
+class Control(BaseModel):
+    """Experimental control aggregated from outline.overall_controls +
+    per-procedure controls."""
+    name: str
+    type: Literal["positive", "negative", "vehicle", "sham"]
+    purpose: str
+    derived_from: str  # "outline.overall_controls" | "procedure 'X'.controls"
+
+
+class FailureMode(BaseModel):
+    """A way the experiment can fail to give a clean answer. LLM-
+    generated but REQUIRED to cite a specific procedure or step;
+    concerns without grounding get filtered out by the parser."""
+    mode: str
+    likely_cause: str
+    mitigation: str
+    cites: str  # "procedure 'X'" | "step N (procedure 'Y')"
+
+
+class ValidationOutput(BaseModel):
+    """Stage 6 output. Defensible by construction: every criterion
+    and control cites its source; failure modes cite specific
+    procedures; power calc shows formula + assumptions explicitly.
+    `methodology` is a top-level audit summary."""
+    success_criteria: list[SuccessCriterion]
+    controls: list[Control]
+    failure_modes: list[FailureMode]
+    power_calculation: Optional[PowerCalculation] = None
+    expected_outcome_summary: str
+    go_no_go_threshold: str
+    methodology: str
+    generated_at: str = Field(default_factory=now)
+
+
 # ---- ExperimentPlan (blackboard) -----------------------------------------
 
 class ExperimentPlanMeta(BaseModel):
@@ -371,7 +452,7 @@ class ExperimentPlan(BaseModel):
     materials: Optional[MaterialsOutput] = None
     budget: Optional[dict[str, Any]] = None          # -> BudgetOutput
     timeline: Optional[TimelineOutput] = None
-    validation: Optional[dict[str, Any]] = None      # -> ValidationOutput
+    validation: Optional[ValidationOutput] = None
     critique: Optional[dict[str, Any]] = None        # -> DesignCritique
     summary: Optional[dict[str, Any]] = None         # -> SummaryOutput
 

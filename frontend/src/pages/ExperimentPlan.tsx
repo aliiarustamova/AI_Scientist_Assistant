@@ -4,6 +4,7 @@ import {
   postMaterials,
   postProtocol,
   postTimeline,
+  postValidation,
   type FEMaterialGroup,
   type FEMaterialsView,
   type FEProcedureGroup,
@@ -11,6 +12,7 @@ import {
   type FEProtocolView,
   type StructuredHypothesis,
   type TimelineOutput,
+  type ValidationOutput,
 } from "@/lib/api";
 import { composeHypothesisQuestion } from "@/lib/hypothesis";
 import {
@@ -917,6 +919,7 @@ const ExperimentPlan = () => {
   const [apiProtocolView, setApiProtocolView] = useState<FEProtocolView | null>(null);
   const [apiMaterialsView, setApiMaterialsView] = useState<FEMaterialsView | null>(null);
   const [apiTimeline, setApiTimeline] = useState<TimelineOutput | null>(null);
+  const [apiValidation, setApiValidation] = useState<ValidationOutput | null>(null);
   const [apiError, setApiError] = useState<string | null>(null);
 
   const useMockData = !incomingPlanId && !incomingStructured;
@@ -963,6 +966,17 @@ const ExperimentPlan = () => {
           setApiTimeline(tl.timeline);
         } catch {
           // non-fatal — keep going with the hardcoded timeline fallback
+        }
+
+        // Stage 6: validation. One LLM call (failure modes) — runs in
+        // parallel with the rest of the page reveal. If it fails, the
+        // FE falls back to the procedure-derived criteria from Phase A.
+        try {
+          const val = await postValidation({ plan_id: proto.plan_id }, ac.signal);
+          setApiValidation(val.validation);
+        } catch {
+          // non-fatal — Phase A wiring still gives a procedure-derived
+          // criteria list, just without power calc / failure modes.
         }
 
         // The remaining reveal stages (3, 4) gate budget/timeline/validation.
@@ -2276,6 +2290,136 @@ const ExperimentPlan = () => {
                 </ul>
               </div>
             </div>
+
+            {/* Stage 6 (real /validation output): power calc, controls,
+                failure modes. Each entry shows its citation chip so the
+                researcher can audit the source. Only renders when the
+                /validation call resolved — Phase A's procedure-derived
+                criteria above continue to show otherwise. */}
+            {apiValidation && (
+              <div className="mt-6 grid grid-cols-1 gap-6 sm:grid-cols-2">
+                {/* Power calc */}
+                {apiValidation.power_calculation && (
+                  <div className="rounded-md border border-rule bg-paper-raised px-7 py-6">
+                    <p className="font-mono-notebook text-[11px] uppercase tracking-[0.22em] text-primary">
+                      Sample size estimate
+                    </p>
+                    <div className="mt-3 flex items-baseline gap-3">
+                      <span
+                        className="font-serif-display text-[34px] leading-none text-ink"
+                        title="n per arm"
+                      >
+                        n = {apiValidation.power_calculation.n_per_group}
+                      </span>
+                      <span className="font-mono-notebook text-[11px] uppercase tracking-[0.2em] text-muted-foreground">
+                        per arm · total {apiValidation.power_calculation.total_n}
+                      </span>
+                    </div>
+                    <p className="mt-2 font-mono-notebook text-[11px] text-ink-soft">
+                      {apiValidation.power_calculation.statistical_test} ·
+                      α = {apiValidation.power_calculation.alpha} ·
+                      power = {apiValidation.power_calculation.power}
+                    </p>
+                    <details className="mt-4">
+                      <summary className="cursor-pointer font-mono-notebook text-[10px] uppercase tracking-[0.2em] text-muted-foreground hover:text-ink">
+                        Methodology &amp; assumptions
+                      </summary>
+                      <p className="mt-2 text-[13px] leading-[1.55] text-ink-soft">
+                        {apiValidation.power_calculation.formula}
+                      </p>
+                      <p className="mt-2 text-[13px] leading-[1.55] text-ink-soft">
+                        {apiValidation.power_calculation.rationale}
+                      </p>
+                      <ul className="mt-3 space-y-1.5">
+                        {apiValidation.power_calculation.assumptions.map((a, i) => (
+                          <li
+                            key={i}
+                            className="flex gap-2 text-[12.5px] leading-[1.55] text-ink-soft"
+                          >
+                            <span aria-hidden className="mt-2 h-1 w-1 shrink-0 rounded-full bg-ink-soft" />
+                            <span>{a}</span>
+                          </li>
+                        ))}
+                      </ul>
+                      <p className="mt-3 font-mono-notebook text-[10px] text-muted-foreground">
+                        Effect: {apiValidation.power_calculation.effect_size.type} ·{" "}
+                        {apiValidation.power_calculation.effect_size.derived_from}
+                      </p>
+                    </details>
+                  </div>
+                )}
+
+                {/* Controls */}
+                {apiValidation.controls.length > 0 && (
+                  <div className="rounded-md border border-rule bg-paper-raised px-7 py-6">
+                    <p className="font-mono-notebook text-[11px] uppercase tracking-[0.22em] text-sage">
+                      Controls
+                    </p>
+                    <ul className="mt-4 space-y-3">
+                      {apiValidation.controls.map((c, i) => (
+                        <li
+                          key={i}
+                          className="text-[14px] leading-[1.55] text-ink"
+                        >
+                          <div className="flex items-baseline gap-2">
+                            <span className="font-mono-notebook text-[10px] uppercase tracking-[0.2em] text-primary">
+                              {c.type}
+                            </span>
+                            <span>{c.name}</span>
+                          </div>
+                          <p className="mt-0.5 font-mono-notebook text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
+                            from {c.derived_from}
+                          </p>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Failure modes — full-width row. LLM-emitted but every
+                entry is forced to cite a procedure (parser drops
+                ungrounded entries server-side). */}
+            {apiValidation && apiValidation.failure_modes.length > 0 && (
+              <div className="mt-6 rounded-md border border-rule bg-paper-raised px-7 py-6">
+                <p className="font-mono-notebook text-[11px] uppercase tracking-[0.22em] text-ink-soft">
+                  Failure modes &amp; mitigations
+                </p>
+                <ul className="mt-4 space-y-4">
+                  {apiValidation.failure_modes.map((fm, i) => (
+                    <li
+                      key={i}
+                      className="border-l-2 border-rule pl-4 text-[14px] leading-[1.55] text-ink"
+                    >
+                      <p className="font-medium text-ink">{fm.mode}</p>
+                      <p className="mt-1 text-[13px] text-ink-soft">
+                        <span className="font-mono-notebook text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
+                          cause
+                        </span>{" "}
+                        {fm.likely_cause}
+                      </p>
+                      <p className="mt-1 text-[13px] text-ink-soft">
+                        <span className="font-mono-notebook text-[10px] uppercase tracking-[0.2em] text-sage">
+                          mitigation
+                        </span>{" "}
+                        {fm.mitigation}
+                      </p>
+                      <p className="mt-1.5 font-mono-notebook text-[10px] uppercase tracking-[0.2em] text-muted-foreground">
+                        ↑ {fm.cites}
+                      </p>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {/* Methodology footer — audit trail for this whole section. */}
+            {apiValidation && (
+              <p className="mt-4 font-mono-notebook text-[11px] leading-[1.55] text-muted-foreground">
+                {apiValidation.methodology}
+              </p>
+            )}
             </div>
           </details>
         )}

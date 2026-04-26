@@ -18,6 +18,8 @@ export default defineConfig(({ mode }) => ({
       "/lit-review": "http://localhost:5000",
       "/protocol":   "http://localhost:5000",
       "/materials":  "http://localhost:5000",
+      "/timeline":   "http://localhost:5000",
+      "/validation": "http://localhost:5000",
       "/health":     "http://localhost:5000",
     },
   },

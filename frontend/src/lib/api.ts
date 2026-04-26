@@ -211,6 +211,69 @@ export type TimelineResponse = {
   timeline: TimelineOutput;
 };
 
+// ----- /validation response (Stage 6) -------------------------------------
+// Mostly deterministic + 1 LLM call (failure_modes). Every output carries
+// `derived_from` or `cites` so the FE can show audit chips.
+
+export type EffectSize = {
+  value: number;
+  type: string;            // "cohens_d" | "percent_change_absolute" | ...
+  derived_from: string;
+};
+
+export type PowerCalculation = {
+  statistical_test: string;
+  alpha: number;
+  power: number;
+  effect_size: EffectSize;
+  n_per_group: number;
+  groups: number;
+  total_n: number;
+  formula: string;
+  assumptions: string[];
+  rationale: string;
+};
+
+export type ValidationSuccessCriterion = {
+  id: string;
+  criterion: string;
+  measurement_method: string;
+  threshold: string;
+  statistical_test?: string;
+  expected_value?: string;
+  derived_from: string;
+};
+
+export type ValidationControl = {
+  name: string;
+  type: "positive" | "negative" | "vehicle" | "sham";
+  purpose: string;
+  derived_from: string;
+};
+
+export type FailureMode = {
+  mode: string;
+  likely_cause: string;
+  mitigation: string;
+  cites: string;
+};
+
+export type ValidationOutput = {
+  success_criteria: ValidationSuccessCriterion[];
+  controls: ValidationControl[];
+  failure_modes: FailureMode[];
+  power_calculation?: PowerCalculation;
+  expected_outcome_summary: string;
+  go_no_go_threshold: string;
+  methodology: string;
+  generated_at: string;
+};
+
+export type ValidationResponse = {
+  plan_id: string;
+  validation: ValidationOutput;
+};
+
 // ----- Error shape -------------------------------------------------------
 
 export type ApiError = {
@@ -299,4 +362,8 @@ export function postMaterials(body: StageRequest, signal?: AbortSignal): Promise
 
 export function postTimeline(body: StageRequest, signal?: AbortSignal): Promise<TimelineResponse> {
   return postJson("/timeline", body, signal);
+}
+
+export function postValidation(body: StageRequest, signal?: AbortSignal): Promise<ValidationResponse> {
+  return postJson("/validation", body, signal);
 }

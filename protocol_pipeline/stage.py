@@ -254,6 +254,18 @@ def run_timeline_only(protocol: ProtocolGenerationOutput):
     return compute_timeline(protocol)
 
 
+def run_validation_only(
+    hypothesis: Hypothesis,
+    protocol: ProtocolGenerationOutput,
+):
+    """Run Stage 6 only: validation block (success criteria, controls,
+    failure modes, power calc). Mostly deterministic; one LLM call for
+    failure modes. Designed for a /validation endpoint that chains off
+    a previously-saved protocol."""
+    from .validation import compute_validation
+    return compute_validation(hypothesis, protocol)
+
+
 def run(
     hypothesis: Hypothesis,
     *,
