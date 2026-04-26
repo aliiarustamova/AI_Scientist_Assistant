@@ -30,7 +30,7 @@ Backend: **Europe PMC** for paper retrieval; LLM (Gemini 2.5 Flash via OpenRoute
 
 ### ❌ Known caveats
 
-- **Bare `LitReviewOutput`, no `LitReviewSession` envelope** — these JSONs are just the inner result. The full session shape (`chat_history`, `cached_tavily_context`, `user_decision`) lives in [`spec/types/lit-review.ts`](../spec/types/lit-review.ts) but isn't wrapped on the CLI side yet. FE can build against the inner shape and we'll add the envelope when conversational follow-ups land.
+- **Bare `LitReviewOutput`, no `LitReviewSession` envelope** — these JSONs are just the inner result. The full session shape (`chat_history`, `cached_search_context`, `user_decision`) lives in [`spec/types/lit-review.ts`](../spec/types/lit-review.ts) but isn't wrapped on the CLI side yet. FE can build against the inner shape and we'll add the envelope when conversational follow-ups land.
 - **`source` field** is `"europe_pmc"` (was `"paper"` in earlier Tavily-era runs). Don't assume the value when filtering or routing in UI.
 - **Long Unicode** (μ, ±, °C, em-dashes) appears in abstracts. UI must be UTF-8 throughout.
 

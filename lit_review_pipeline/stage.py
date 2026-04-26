@@ -133,7 +133,9 @@ def _rewrite_query(h: Hypothesis) -> str:
 # ----------------------------------------------------------------------------
 
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
-_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+# Lookahead for an uppercase letter avoids false splits on common scientific
+# abbreviations like "et al.", "i.e.", "e.g.", "vs.", "Fig.".
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+(?=[A-Z])")
 
 
 def _clean_text(s: str | None) -> str | None:
@@ -342,6 +344,6 @@ def run(plan: ExperimentPlan) -> LitReviewSession:
         hypothesis_id=h.id,
         initial_result=initial,
         chat_history=[],
-        cached_tavily_context=json.dumps(epmc_response),  # field name historical
+        cached_search_context=json.dumps(epmc_response),
         user_decision="pending",
     )

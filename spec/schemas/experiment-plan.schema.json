@@ -201,14 +201,14 @@
 
     "LitReviewSession": {
       "type": "object",
-      "required": ["id", "hypothesis_id", "initial_result", "chat_history", "cached_tavily_context", "user_decision"],
+      "required": ["id", "hypothesis_id", "initial_result", "chat_history", "cached_search_context", "user_decision"],
       "additionalProperties": false,
       "properties": {
         "id": { "type": "string" },
         "hypothesis_id": { "type": "string" },
         "initial_result": { "$ref": "#/definitions/LitReviewOutput" },
         "chat_history": { "type": "array", "items": { "$ref": "#/definitions/LitReviewChatMessage" } },
-        "cached_tavily_context": { "type": "string" },
+        "cached_search_context": { "type": "string" },
         "user_decision": { "type": "string", "enum": ["pending", "proceed", "refine", "abandon"] }
       }
     },

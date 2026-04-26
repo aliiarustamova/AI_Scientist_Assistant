@@ -53,7 +53,7 @@ def client(monkeypatch):
             hypothesis_id=plan.hypothesis.id,
             initial_result=out,
             chat_history=[],
-            cached_tavily_context="{}",
+            cached_search_context="{}",
             user_decision="pending",
         )
 

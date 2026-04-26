@@ -75,7 +75,7 @@ class LitReviewSession(BaseModel):
     hypothesis_id: str
     initial_result: LitReviewOutput
     chat_history: list[LitReviewChatMessage] = []
-    cached_tavily_context: str
+    cached_search_context: str
     user_decision: Literal["pending", "proceed", "refine", "abandon"] = "pending"
 
 

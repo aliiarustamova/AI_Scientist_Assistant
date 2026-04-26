@@ -227,7 +227,7 @@ tavily.search({
 
 ### Stage 1 chat follow-ups
 
-The conversational layer **doesn't fire fresh Tavily calls per turn**. The initial search result + raw content is cached on the `LitReviewSession` (`cached_tavily_context`), and follow-up questions are answered by the LLM over that cached context. New Tavily calls only fire if the user materially changes the search topic or explicitly asks for "more papers."
+The conversational layer **doesn't fire fresh search calls per turn**. The initial search result is cached on the `LitReviewSession` (`cached_search_context`), and follow-up questions are answered by the LLM over that cached context. New search calls only fire if the user materially changes the search topic or explicitly asks for "more papers."
 
 ### Stage 3 — Materials gap-fill
 

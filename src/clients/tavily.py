@@ -1,14 +1,25 @@
 """Tavily wrapper. Stage-specific helpers bake in the recommended
-parameters per spec/architecture.md > 'Tavily call shapes per stage'."""
+parameters per spec/architecture.md > 'Tavily call shapes per stage'.
+
+Client instances are cached per API key so we get TLS/connection reuse
+across calls. Tests that swap env mid-run automatically get fresh clients
+because the cache key is the api_key string itself.
+"""
 
 from __future__ import annotations
 
 import os
+from functools import lru_cache
 from typing import Any
 
 from tavily import TavilyClient
 
 from src.lib import cache
+
+
+@lru_cache(maxsize=2)
+def _tavily_client_for(api_key: str) -> TavilyClient:
+    return TavilyClient(api_key=api_key)
 
 _LIT_REVIEW_TTL = 7 * 24 * 3600       # 7 days
 _GAP_FILL_TTL = 30 * 24 * 3600        # 30 days
@@ -29,7 +40,7 @@ def _client() -> TavilyClient:
     api_key = os.environ.get("TAVILY_API_KEY")
     if not api_key:
         raise RuntimeError("TAVILY_API_KEY is not set. Copy .env.example to .env and fill it in.")
-    return TavilyClient(api_key=api_key)
+    return _tavily_client_for(api_key)
 
 
 def search_for_lit_review(query: str) -> dict[str, Any]:

@@ -341,7 +341,7 @@ type LitReviewSession = {
   hypothesis_id: string;
   initial_result: LitReviewOutput;
   chat_history: LitReviewChatMessage[];
-  cached_tavily_context: string;          // raw Tavily content; reused for follow-ups
+  cached_search_context: string;          // raw search-backend response; reused for chat follow-ups (provider-agnostic)
   user_decision: 'pending' | 'proceed' | 'refine' | 'abandon';
 };
 ```

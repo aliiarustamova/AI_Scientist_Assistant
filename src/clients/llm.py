@@ -1,9 +1,15 @@
 """LLM client abstraction. Picks OpenRouter or Anthropic from LLM_PROVIDER.
-Stages call llm.complete(system, user) without caring which provider runs."""
+Stages call llm.complete(system, user) without caring which provider runs.
+
+Client instances are cached per API key so we get TLS/connection reuse across
+calls. Tests that swap env vars mid-run automatically get fresh clients
+because the cache key is the api_key string itself.
+"""
 
 from __future__ import annotations
 
 import os
+from functools import lru_cache
 from typing import Literal
 
 Provider = Literal["openrouter", "anthropic"]
@@ -29,14 +35,34 @@ def complete(system: str, user: str, *, json_mode: bool = False) -> str:
     return _anthropic_complete(system, user, json_mode=json_mode)
 
 
-def _openrouter_complete(system: str, user: str, *, json_mode: bool) -> str:
-    from openai import OpenAI
+# ---------------------------------------------------------------------------
+# Cached client factories
+# ---------------------------------------------------------------------------
+# Keyed on api_key so changing env (e.g., between tests, or rotating keys
+# in production) yields a fresh client. Same key = reused instance.
 
+@lru_cache(maxsize=2)
+def _openai_client_for(api_key: str, base_url: str):
+    from openai import OpenAI
+    return OpenAI(api_key=api_key, base_url=base_url)
+
+
+@lru_cache(maxsize=2)
+def _anthropic_client_for(api_key: str):
+    import anthropic
+    return anthropic.Anthropic(api_key=api_key)
+
+
+# ---------------------------------------------------------------------------
+# Provider-specific completion paths
+# ---------------------------------------------------------------------------
+
+def _openrouter_complete(system: str, user: str, *, json_mode: bool) -> str:
     api_key = os.environ.get("OPENROUTER_API_KEY")
     if not api_key:
         raise RuntimeError("OPENROUTER_API_KEY is not set.")
 
-    client = OpenAI(api_key=api_key, base_url="https://openrouter.ai/api/v1")
+    client = _openai_client_for(api_key, "https://openrouter.ai/api/v1")
     kwargs: dict = {
         "model": model_id(),
         "messages": [
@@ -58,13 +84,11 @@ def _openrouter_complete(system: str, user: str, *, json_mode: bool) -> str:
 
 
 def _anthropic_complete(system: str, user: str, *, json_mode: bool) -> str:
-    import anthropic
-
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         raise RuntimeError("ANTHROPIC_API_KEY is not set.")
 
-    client = anthropic.Anthropic(api_key=api_key)
+    client = _anthropic_client_for(api_key)
     # json_mode for Anthropic: ask in the system prompt; SDK doesn't have a native flag.
     sys = system + ("\n\nReturn ONLY valid JSON. No prose, no markdown fences." if json_mode else "")
 

@@ -26,6 +26,6 @@ export type LitReviewSession = {
   hypothesis_id: string;
   initial_result: LitReviewOutput;
   chat_history: LitReviewChatMessage[];
-  cached_tavily_context: string;
+  cached_search_context: string;
   user_decision: 'pending' | 'proceed' | 'refine' | 'abandon';
 };
