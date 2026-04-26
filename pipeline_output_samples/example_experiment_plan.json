@@ -1,0 +1,1017 @@
+{
+  "id": "plan_demo_trehalose_001",
+  "hypothesis": {
+    "id": "hyp_demo_trehalose_001",
+    "text": "Does intracellular trehalose loading improve post-thaw viability of HeLa cells compared with a standard 10% DMSO cryopreservation workflow?",
+    "domain": "cell_biology",
+    "intervention": "Intracellular trehalose loading before freezing",
+    "measurable_outcome": "Post-thaw viability and recovery",
+    "control_implied": "Standard 10% DMSO cryopreservation",
+    "created_at": "2026-04-25T22:40:00Z"
+  },
+  "lit_review": {
+    "id": "lr_demo_trehalose_001",
+    "hypothesis_id": "hyp_demo_trehalose_001",
+    "initial_result": {
+      "signal": "similar_work_exists",
+      "description": "Trehalose-assisted cryopreservation is well represented in the literature, but exact HeLa-specific intracellular loading workflows remain less standardized than DMSO controls. The idea is directionally supported, though the exact experimental framing is not an obvious duplicate.",
+      "references": [
+        {
+          "source": "paper",
+          "confidence": "high",
+          "doi": "10.1016/j.cryobiol.2019.01.010",
+          "url": "https://doi.org/10.1016/j.cryobiol.2019.01.010",
+          "title": "Trehalose as an alternative cryoprotectant in mammalian cell preservation",
+          "authors": [
+            "Jane Example",
+            "R. Example"
+          ],
+          "year": 2019,
+          "venue": "Cryobiology",
+          "snippet": "Trehalose can reduce membrane injury but often requires delivery strategies to improve intracellular access.",
+          "relevance_score": 0.91,
+          "description": "Review of trehalose-based cryopreservation strategies for mammalian cells.",
+          "matched_on": [
+            "trehalose",
+            "cryopreservation",
+            "mammalian cells"
+          ],
+          "importance": "Supports the biological rationale for comparing trehalose with DMSO."
+        },
+        {
+          "source": "paper",
+          "confidence": "medium",
+          "doi": "10.1002/bit.27888",
+          "url": "https://doi.org/10.1002/bit.27888",
+          "title": "Cell loading strategies for non-permeating cryoprotectants",
+          "authors": [
+            "A. Researcher",
+            "B. Scientist"
+          ],
+          "year": 2021,
+          "venue": "Biotechnology and Bioengineering",
+          "snippet": "Loading method can determine whether trehalose provides measurable post-thaw benefit.",
+          "relevance_score": 0.84,
+          "description": "Compares delivery techniques used to get trehalose inside mammalian cells before freezing.",
+          "matched_on": [
+            "intracellular loading",
+            "trehalose"
+          ],
+          "importance": "Directly informs the intervention arm design."
+        }
+      ],
+      "searched_at": "2026-04-25T22:41:10Z",
+      "tavily_query": "trehalose intracellular loading hela cell cryopreservation viability DMSO",
+      "summary": "The hypothesis is not fully novel at the mechanism level because trehalose cryoprotection has prior support. The potentially differentiating part is the exact loading method and HeLa-focused benchmarking against a standard DMSO workflow. The study is still worth running if the protocol clearly specifies loading, freezing, and recovery conditions."
+    },
+    "chat_history": [],
+    "cached_search_context": "{\"provider\":\"europe_pmc\",\"hits\":12}",
+    "user_decision": "proceed"
+  },
+  "protocol": {
+    "experiment_type": "mammalian cell cryopreservation comparison",
+    "domain": "cell_biology",
+    "procedures": [
+      {
+        "name": "Cell Expansion and Pre-freeze Preparation",
+        "intent": "Grow matched HeLa cultures and prepare treatment and control arms under consistent baseline conditions.",
+        "steps": [
+          {
+            "n": 1,
+            "title": "Expand HeLa cells to logarithmic growth",
+            "body_md": "Culture HeLa cells in DMEM plus 10% FBS and 1% penicillin-streptomycin at 37 C with 5% CO2 until cultures reach approximately 70 to 80% confluence on the day of freezing.",
+            "duration": "P2D",
+            "equipment_needed": [
+              "CO2 incubator",
+              "Class II biosafety cabinet"
+            ],
+            "reagents_referenced": [
+              "HeLa cells",
+              "DMEM",
+              "FBS",
+              "penicillin-streptomycin"
+            ],
+            "params": {
+              "temperature": {
+                "value": 37,
+                "unit": "C"
+              },
+              "other": {
+                "co2": "5%"
+              }
+            },
+            "controls": [
+              "Use cultures from the same passage window for both arms"
+            ],
+            "todo_for_researcher": [],
+            "source_step_refs": [
+              "pio_step_hela_expand_01"
+            ],
+            "notes": "Keep passage number aligned across replicates.",
+            "cited_doi": "10.1016/j.cryobiol.2019.01.010"
+          },
+          {
+            "n": 2,
+            "title": "Prepare trehalose-loaded and DMSO control suspensions",
+            "body_md": "Harvest cells with trypsin, neutralize, and count viable cells. Split evenly into two arms. For the trehalose arm, apply the selected loading workflow before resuspending in trehalose-containing freezing medium. For the control arm, resuspend in standard freezing medium containing 10% DMSO.",
+            "duration": "PT1H30M",
+            "equipment_needed": [
+              "Centrifuge",
+              "Automated cell counter"
+            ],
+            "reagents_referenced": [
+              "Trypsin-EDTA",
+              "PBS",
+              "Trehalose",
+              "DMSO"
+            ],
+            "params": {
+              "concentration": {
+                "value": 1,
+                "unit": "e6 cells/mL"
+              },
+              "other": {
+                "target_freeze_density": "1e6 cells per cryovial"
+              }
+            },
+            "controls": [
+              "Match cell density across arms",
+              "Process both arms in parallel"
+            ],
+            "todo_for_researcher": [
+              "Lock the intracellular trehalose loading method before execution"
+            ],
+            "source_step_refs": [
+              "pio_step_loading_02"
+            ],
+            "notes": "This step contains the main experimental adaptation.",
+            "cited_doi": "10.1002/bit.27888"
+          }
+        ],
+        "equipment": [
+          "CO2 incubator",
+          "Class II biosafety cabinet",
+          "Centrifuge",
+          "Automated cell counter"
+        ],
+        "reagents": [
+          "HeLa cells",
+          "DMEM",
+          "FBS",
+          "penicillin-streptomycin",
+          "Trypsin-EDTA",
+          "Trehalose",
+          "DMSO"
+        ],
+        "deviations_from_source": [
+          {
+            "from_source": "Source protocols treat trehalose loading as a generic option across mammalian cells.",
+            "to_adapted": "This plan fixes the comparison to HeLa cells and a direct DMSO benchmark.",
+            "reason": "The hypothesis requires a controlled head-to-head comparison in one cell model.",
+            "source_protocol_id": "pio_protocol_cryo_001",
+            "confidence": "high"
+          }
+        ],
+        "source_protocol_ids": [
+          "pio_protocol_cryo_001"
+        ],
+        "success_criteria": [
+          {
+            "what": "Equivalent starting viability and density before freezing",
+            "how_measured": "Cell count and trypan blue viability",
+            "threshold": "At least 90% pre-freeze viability in both arms",
+            "pass_fail": true
+          }
+        ]
+      },
+      {
+        "name": "Controlled Freezing, Thawing, and Readout",
+        "intent": "Freeze, store, thaw, and compare recovery outcomes between treatment arms.",
+        "steps": [
+          {
+            "n": 3,
+            "title": "Freeze cryovials with controlled-rate cooling",
+            "body_md": "Aliquot matched suspensions into labeled cryovials and place them in an isopropanol freezing container at minus 80 C overnight before transfer to liquid nitrogen storage.",
+            "duration": "P1D",
+            "equipment_needed": [
+              "Mr. Frosty freezing container",
+              "-80 C freezer",
+              "Liquid nitrogen storage"
+            ],
+            "reagents_referenced": [
+              "Cryovials"
+            ],
+            "params": {
+              "temperature": {
+                "value": -80,
+                "unit": "C"
+              },
+              "duration": {
+                "value": 1,
+                "unit": "D"
+              }
+            },
+            "controls": [
+              "Freeze both arms in the same batch"
+            ],
+            "todo_for_researcher": [],
+            "source_step_refs": [
+              "pio_step_freeze_03"
+            ],
+            "notes": "Minimize timing differences between aliquoting and freezing.",
+            "cited_doi": "10.1016/j.cryobiol.2019.01.010"
+          },
+          {
+            "n": 4,
+            "title": "Thaw and assess immediate post-thaw viability",
+            "body_md": "Rapidly thaw cryovials in a 37 C water bath, dilute into pre-warmed complete medium, pellet cells to remove cryoprotectant, and assess viability by trypan blue or equivalent live-dead readout.",
+            "duration": "PT45M",
+            "equipment_needed": [
+              "37 C water bath",
+              "Centrifuge",
+              "Automated cell counter"
+            ],
+            "reagents_referenced": [
+              "Complete medium",
+              "Trypan blue"
+            ],
+            "params": {
+              "temperature": {
+                "value": 37,
+                "unit": "C"
+              }
+            },
+            "controls": [
+              "Use the same thaw timing and wash volume across groups"
+            ],
+            "todo_for_researcher": [],
+            "source_step_refs": [
+              "pio_step_thaw_04"
+            ],
+            "notes": "Immediate viability is the primary endpoint.",
+            "cited_doi": "10.1016/j.cryobiol.2019.01.010"
+          },
+          {
+            "n": 5,
+            "title": "Measure 24-hour recovery",
+            "body_md": "Plate equal numbers of thawed cells, incubate for 24 hours, and quantify attachment, morphology, and metabolic recovery using a secondary assay such as resazurin.",
+            "duration": "P1D",
+            "equipment_needed": [
+              "Plate reader",
+              "CO2 incubator"
+            ],
+            "reagents_referenced": [
+              "Resazurin assay reagent"
+            ],
+            "params": {
+              "duration": {
+                "value": 1,
+                "unit": "D"
+              }
+            },
+            "controls": [
+              "Normalize recovery signal to plated cell number"
+            ],
+            "todo_for_researcher": [
+              "Decide whether to prioritize attachment, metabolic signal, or both as the secondary endpoint"
+            ],
+            "source_step_refs": [
+              "pio_step_recovery_05"
+            ],
+            "notes": "Recovery helps distinguish transient membrane damage from sustained loss of fitness.",
+            "cited_doi": "10.1002/bit.27888"
+          }
+        ],
+        "equipment": [
+          "Mr. Frosty freezing container",
+          "-80 C freezer",
+          "Liquid nitrogen storage",
+          "37 C water bath",
+          "Plate reader"
+        ],
+        "reagents": [
+          "Cryovials",
+          "Trypan blue",
+          "Resazurin assay reagent"
+        ],
+        "deviations_from_source": [],
+        "source_protocol_ids": [
+          "pio_protocol_cryo_001",
+          "pio_protocol_recovery_002"
+        ],
+        "success_criteria": [
+          {
+            "what": "Stable controlled-rate freezing conditions",
+            "how_measured": "Single container and synchronized batch handling",
+            "threshold": "No arm-specific freezer handling differences",
+            "pass_fail": true
+          }
+        ]
+      }
+    ],
+    "steps": [
+      {
+        "n": 1,
+        "title": "Expand HeLa cells to logarithmic growth",
+        "body_md": "Culture HeLa cells in DMEM plus 10% FBS and 1% penicillin-streptomycin at 37 C with 5% CO2 until cultures reach approximately 70 to 80% confluence on the day of freezing.",
+        "duration": "P2D",
+        "equipment_needed": [
+          "CO2 incubator",
+          "Class II biosafety cabinet"
+        ],
+        "reagents_referenced": [
+          "HeLa cells",
+          "DMEM",
+          "FBS",
+          "penicillin-streptomycin"
+        ],
+        "params": {
+          "temperature": {
+            "value": 37,
+            "unit": "C"
+          },
+          "other": {
+            "co2": "5%"
+          }
+        },
+        "controls": [
+          "Use cultures from the same passage window for both arms"
+        ],
+        "todo_for_researcher": [],
+        "source_step_refs": [
+          "pio_step_hela_expand_01"
+        ],
+        "notes": "Keep passage number aligned across replicates.",
+        "cited_doi": "10.1016/j.cryobiol.2019.01.010"
+      },
+      {
+        "n": 2,
+        "title": "Prepare trehalose-loaded and DMSO control suspensions",
+        "body_md": "Harvest cells with trypsin, neutralize, and count viable cells. Split evenly into two arms. For the trehalose arm, apply the selected loading workflow before resuspending in trehalose-containing freezing medium. For the control arm, resuspend in standard freezing medium containing 10% DMSO.",
+        "duration": "PT1H30M",
+        "equipment_needed": [
+          "Centrifuge",
+          "Automated cell counter"
+        ],
+        "reagents_referenced": [
+          "Trypsin-EDTA",
+          "PBS",
+          "Trehalose",
+          "DMSO"
+        ],
+        "params": {
+          "concentration": {
+            "value": 1,
+            "unit": "e6 cells/mL"
+          },
+          "other": {
+            "target_freeze_density": "1e6 cells per cryovial"
+          }
+        },
+        "controls": [
+          "Match cell density across arms",
+          "Process both arms in parallel"
+        ],
+        "todo_for_researcher": [
+          "Lock the intracellular trehalose loading method before execution"
+        ],
+        "source_step_refs": [
+          "pio_step_loading_02"
+        ],
+        "notes": "This step contains the main experimental adaptation.",
+        "cited_doi": "10.1002/bit.27888"
+      },
+      {
+        "n": 3,
+        "title": "Freeze cryovials with controlled-rate cooling",
+        "body_md": "Aliquot matched suspensions into labeled cryovials and place them in an isopropanol freezing container at minus 80 C overnight before transfer to liquid nitrogen storage.",
+        "duration": "P1D",
+        "equipment_needed": [
+          "Mr. Frosty freezing container",
+          "-80 C freezer",
+          "Liquid nitrogen storage"
+        ],
+        "reagents_referenced": [
+          "Cryovials"
+        ],
+        "params": {
+          "temperature": {
+            "value": -80,
+            "unit": "C"
+          }
+        },
+        "controls": [
+          "Freeze both arms in the same batch"
+        ],
+        "todo_for_researcher": [],
+        "source_step_refs": [
+          "pio_step_freeze_03"
+        ],
+        "notes": "Minimize timing differences between aliquoting and freezing.",
+        "cited_doi": "10.1016/j.cryobiol.2019.01.010"
+      },
+      {
+        "n": 4,
+        "title": "Thaw and assess immediate post-thaw viability",
+        "body_md": "Rapidly thaw cryovials in a 37 C water bath, dilute into pre-warmed complete medium, pellet cells to remove cryoprotectant, and assess viability by trypan blue or equivalent live-dead readout.",
+        "duration": "PT45M",
+        "equipment_needed": [
+          "37 C water bath",
+          "Centrifuge",
+          "Automated cell counter"
+        ],
+        "reagents_referenced": [
+          "Complete medium",
+          "Trypan blue"
+        ],
+        "params": {
+          "temperature": {
+            "value": 37,
+            "unit": "C"
+          }
+        },
+        "controls": [
+          "Use the same thaw timing and wash volume across groups"
+        ],
+        "todo_for_researcher": [],
+        "source_step_refs": [
+          "pio_step_thaw_04"
+        ],
+        "notes": "Immediate viability is the primary endpoint.",
+        "cited_doi": "10.1016/j.cryobiol.2019.01.010"
+      },
+      {
+        "n": 5,
+        "title": "Measure 24-hour recovery",
+        "body_md": "Plate equal numbers of thawed cells, incubate for 24 hours, and quantify attachment, morphology, and metabolic recovery using a secondary assay such as resazurin.",
+        "duration": "P1D",
+        "equipment_needed": [
+          "Plate reader",
+          "CO2 incubator"
+        ],
+        "reagents_referenced": [
+          "Resazurin assay reagent"
+        ],
+        "params": {
+          "duration": {
+            "value": 1,
+            "unit": "D"
+          }
+        },
+        "controls": [
+          "Normalize recovery signal to plated cell number"
+        ],
+        "todo_for_researcher": [
+          "Decide whether to prioritize attachment, metabolic signal, or both as the secondary endpoint"
+        ],
+        "source_step_refs": [
+          "pio_step_recovery_05"
+        ],
+        "notes": "Recovery helps distinguish transient membrane damage from sustained loss of fitness.",
+        "cited_doi": "10.1002/bit.27888"
+      }
+    ],
+    "cited_protocols": [
+      {
+        "doi": "10.1016/j.cryobiol.2019.01.010",
+        "protocols_io_id": "pio_protocol_cryo_001",
+        "title": "Mammalian cell cryopreservation workflow using non-permeating protectants",
+        "contribution_weight": 0.62
+      },
+      {
+        "doi": "10.1002/bit.27888",
+        "protocols_io_id": "pio_protocol_recovery_002",
+        "title": "Comparative recovery assays after cryopreservation",
+        "contribution_weight": 0.38
+      }
+    ],
+    "regulatory_requirements": [
+      {
+        "requirement": "BSL-2 tissue culture access",
+        "authority": "institutional biosafety",
+        "applicable_because": "HeLa cell culture requires compliant mammalian tissue culture handling.",
+        "estimated_lead_time": "P1W",
+        "notes": "Assumes an existing cell culture facility."
+      }
+    ],
+    "assumptions": [
+      "The selected trehalose loading workflow is compatible with HeLa cells.",
+      "Controlled-rate freezing equipment is already available.",
+      "HeLa passage number is kept within a narrow window across replicates."
+    ],
+    "total_steps": 5,
+    "source_protocol_ids": [
+      "pio_protocol_cryo_001",
+      "pio_protocol_recovery_002"
+    ],
+    "generated_at": "2026-04-25T22:48:00Z"
+  },
+  "materials": {
+    "materials": [
+      {
+        "id": "mat_hela_cells",
+        "name": "HeLa cells",
+        "category": "cell_line",
+        "qty": 1,
+        "unit": "vial",
+        "vendor": "ATCC",
+        "sku": "CCL-2",
+        "storage": "liquid_nitrogen"
+      },
+      {
+        "id": "mat_dmem",
+        "name": "DMEM high glucose",
+        "category": "reagent",
+        "qty": 1,
+        "unit": "500 mL bottle",
+        "vendor": "Gibco",
+        "sku": "11965092",
+        "storage": "4 C"
+      },
+      {
+        "id": "mat_fbs",
+        "name": "Fetal bovine serum",
+        "category": "reagent",
+        "qty": 1,
+        "unit": "500 mL bottle",
+        "vendor": "Gibco",
+        "sku": "16140071",
+        "storage": "-20 C"
+      },
+      {
+        "id": "mat_trehalose",
+        "name": "Trehalose",
+        "category": "reagent",
+        "qty": 1,
+        "unit": "100 g",
+        "vendor": "Sigma-Aldrich",
+        "sku": "T9449",
+        "storage": "room_temperature"
+      },
+      {
+        "id": "mat_dmso",
+        "name": "DMSO",
+        "category": "reagent",
+        "qty": 1,
+        "unit": "100 mL bottle",
+        "vendor": "Sigma-Aldrich",
+        "sku": "D2650",
+        "storage": "room_temperature"
+      },
+      {
+        "id": "mat_cryovials",
+        "name": "Cryovials",
+        "category": "consumable",
+        "qty": 1,
+        "unit": "box",
+        "vendor": "Corning",
+        "sku": "430659",
+        "storage": "room_temperature"
+      },
+      {
+        "id": "mat_resazurin",
+        "name": "Resazurin cell viability reagent",
+        "category": "reagent",
+        "qty": 1,
+        "unit": "kit",
+        "vendor": "Thermo Fisher",
+        "sku": "DAL1025",
+        "storage": "4 C"
+      },
+      {
+        "id": "mat_mrfrosty",
+        "name": "Controlled-rate freezing container",
+        "category": "equipment",
+        "qty": 1,
+        "unit": "unit",
+        "spec": "Isopropanol freezing container for approximately -1 C/min cooling",
+        "purpose": "Consistent cryovial freezing rate"
+      }
+    ],
+    "total_unique_items": 8,
+    "by_category": {
+      "cell_line": 1,
+      "reagent": 5,
+      "consumable": 1,
+      "equipment": 1
+    },
+    "gaps": [
+      "Researcher must finalize the exact intracellular trehalose loading reagent set if membrane permeabilization or carrier molecules are used."
+    ],
+    "generated_at": "2026-04-25T22:51:00Z"
+  },
+  "budget": {
+    "line_items": [
+      {
+        "material_id": "mat_hela_cells",
+        "material_name": "HeLa cells",
+        "qty": 1,
+        "unit_cost": {
+          "amount": 465.0,
+          "currency": "USD"
+        },
+        "total": {
+          "amount": 465.0,
+          "currency": "USD"
+        },
+        "source": "supplier_lookup",
+        "confidence": "high",
+        "notes": "One vial is sufficient for the proposed pilot run."
+      },
+      {
+        "material_id": "mat_dmem",
+        "material_name": "DMEM high glucose",
+        "qty": 1,
+        "unit_cost": {
+          "amount": 24.0,
+          "currency": "USD"
+        },
+        "total": {
+          "amount": 24.0,
+          "currency": "USD"
+        },
+        "source": "supplier_lookup",
+        "confidence": "high",
+        "notes": "Single 500 mL bottle."
+      },
+      {
+        "material_id": "mat_fbs",
+        "material_name": "Fetal bovine serum",
+        "qty": 1,
+        "unit_cost": {
+          "amount": 210.0,
+          "currency": "USD"
+        },
+        "total": {
+          "amount": 210.0,
+          "currency": "USD"
+        },
+        "source": "supplier_lookup",
+        "confidence": "medium",
+        "notes": "Representative serum pricing."
+      },
+      {
+        "material_id": "mat_trehalose",
+        "material_name": "Trehalose",
+        "qty": 1,
+        "unit_cost": {
+          "amount": 58.0,
+          "currency": "USD"
+        },
+        "total": {
+          "amount": 58.0,
+          "currency": "USD"
+        },
+        "source": "supplier_lookup",
+        "confidence": "high",
+        "notes": "Bulk quantity exceeds pilot needs."
+      },
+      {
+        "material_id": "mat_dmso",
+        "material_name": "DMSO",
+        "qty": 1,
+        "unit_cost": {
+          "amount": 32.0,
+          "currency": "USD"
+        },
+        "total": {
+          "amount": 32.0,
+          "currency": "USD"
+        },
+        "source": "supplier_lookup",
+        "confidence": "high",
+        "notes": "Standard cell culture grade DMSO."
+      },
+      {
+        "material_id": "mat_cryovials",
+        "material_name": "Cryovials",
+        "qty": 1,
+        "unit_cost": {
+          "amount": 48.0,
+          "currency": "USD"
+        },
+        "total": {
+          "amount": 48.0,
+          "currency": "USD"
+        },
+        "source": "supplier_lookup",
+        "confidence": "high",
+        "notes": "Box of sterile cryovials."
+      },
+      {
+        "material_id": "mat_resazurin",
+        "material_name": "Resazurin cell viability reagent",
+        "qty": 1,
+        "unit_cost": {
+          "amount": 96.0,
+          "currency": "USD"
+        },
+        "total": {
+          "amount": 96.0,
+          "currency": "USD"
+        },
+        "source": "supplier_lookup",
+        "confidence": "medium",
+        "notes": "Secondary assay for 24-hour recovery."
+      },
+      {
+        "material_id": "shared_consumables",
+        "material_name": "Pipette tips, tubes, PBS, trypsin, and plates",
+        "qty": 1,
+        "unit_cost": {
+          "amount": 140.0,
+          "currency": "USD"
+        },
+        "total": {
+          "amount": 140.0,
+          "currency": "USD"
+        },
+        "source": "llm_estimate",
+        "confidence": "medium",
+        "notes": "Grouped estimate for routine lab consumables."
+      }
+    ],
+    "subtotals_by_category": {
+      "cell_line": {
+        "amount": 465.0,
+        "currency": "USD"
+      },
+      "reagent": {
+        "amount": 420.0,
+        "currency": "USD"
+      },
+      "consumable": {
+        "amount": 188.0,
+        "currency": "USD"
+      },
+      "equipment": {
+        "amount": 0.0,
+        "currency": "USD"
+      }
+    },
+    "total": {
+      "amount": 1073.0,
+      "currency": "USD"
+    },
+    "contingency_pct": 15,
+    "total_with_contingency": {
+      "amount": 1233.95,
+      "currency": "USD"
+    },
+    "disclaimer": "Representative supplier pricing only. Core equipment and labor are excluded.",
+    "assumptions": [
+      "Institution already has incubator, biosafety cabinet, freezer, and liquid nitrogen access.",
+      "Pilot scale uses one HeLa vial and one main freeze-thaw batch.",
+      "Exact trehalose-loading accessory reagents may change final cost."
+    ],
+    "preferred_suppliers": [
+      "ATCC",
+      "Gibco",
+      "Sigma-Aldrich",
+      "Thermo Fisher"
+    ]
+  },
+  "timeline": {
+    "phases": [
+      {
+        "id": "phase_setup",
+        "name": "Cell setup and reagent prep",
+        "duration": "P3D",
+        "tasks": [
+          {
+            "step_n": 1,
+            "name": "Expand HeLa cells",
+            "duration": "P2D",
+            "hands_on_time": "PT1H",
+            "can_parallel": false
+          },
+          {
+            "step_n": 2,
+            "name": "Prepare freezing media and treatment arms",
+            "duration": "PT1H30M",
+            "hands_on_time": "PT1H30M",
+            "can_parallel": false
+          }
+        ],
+        "depends_on": [],
+        "parallel_with": []
+      },
+      {
+        "id": "phase_freeze",
+        "name": "Freezing and storage",
+        "duration": "P1D",
+        "tasks": [
+          {
+            "step_n": 3,
+            "name": "Controlled-rate freezing",
+            "duration": "P1D",
+            "hands_on_time": "PT30M",
+            "can_parallel": false
+          }
+        ],
+        "depends_on": [
+          "phase_setup"
+        ],
+        "parallel_with": []
+      },
+      {
+        "id": "phase_readout",
+        "name": "Thaw and recovery readout",
+        "duration": "P2D",
+        "tasks": [
+          {
+            "step_n": 4,
+            "name": "Immediate post-thaw viability",
+            "duration": "PT45M",
+            "hands_on_time": "PT45M",
+            "can_parallel": false
+          },
+          {
+            "step_n": 5,
+            "name": "Twenty-four hour recovery assay",
+            "duration": "P1D",
+            "hands_on_time": "PT1H",
+            "can_parallel": false
+          }
+        ],
+        "depends_on": [
+          "phase_freeze"
+        ],
+        "parallel_with": []
+      }
+    ],
+    "total_duration": "P6D",
+    "critical_path": [
+      "phase_setup",
+      "phase_freeze",
+      "phase_readout"
+    ],
+    "assumptions": [
+      "No regulatory delays beyond normal tissue culture access.",
+      "Cells are available immediately after thawing the starting stock.",
+      "Readout is limited to 24-hour recovery rather than multi-day outgrowth."
+    ],
+    "earliest_completion_date": "2026-05-01T18:00:00Z"
+  },
+  "validation": {
+    "success_criteria": [
+      {
+        "id": "sc_viability",
+        "criterion": "Trehalose arm shows improved immediate post-thaw viability versus 10% DMSO control.",
+        "measurement_method": "Trypan blue viability count immediately after thaw and wash.",
+        "threshold": "At least 10 percentage points absolute improvement",
+        "statistical_test": "two-sided t-test",
+        "expected_value": "Trehalose arm greater than DMSO arm"
+      },
+      {
+        "id": "sc_recovery",
+        "criterion": "Trehalose arm maintains equal or better 24-hour recovery signal.",
+        "measurement_method": "Resazurin-based metabolic recovery normalized to plated cell number.",
+        "threshold": "No worse than 5% below control, ideally improved",
+        "statistical_test": "two-sided t-test",
+        "expected_value": "Comparable or improved recovery"
+      }
+    ],
+    "controls": [
+      {
+        "name": "10% DMSO freezing medium",
+        "type": "vehicle",
+        "purpose": "Benchmark against the standard cryopreservation workflow."
+      },
+      {
+        "name": "Matched passage and density control",
+        "type": "negative",
+        "purpose": "Reduce baseline culture-condition drift between arms."
+      }
+    ],
+    "failure_modes": [
+      {
+        "mode": "Trehalose arm performs worse than DMSO despite good pre-freeze viability",
+        "likely_cause": "Loading method fails to deliver enough intracellular trehalose or introduces membrane stress.",
+        "mitigation": "Pilot alternative loading conditions before scaling replicate count."
+      },
+      {
+        "mode": "Both arms show poor viability",
+        "likely_cause": "Freeze-thaw handling variability or unhealthy starting cultures.",
+        "mitigation": "Repeat with tighter confluence control and synchronized freezing."
+      }
+    ],
+    "power_calculation": {
+      "statistical_test": "two-sided t-test",
+      "alpha": 0.05,
+      "power": 0.8,
+      "effect_size": {
+        "value": 10.0,
+        "type": "percent_change"
+      },
+      "n_per_group": 6,
+      "groups": 2,
+      "total_n": 12,
+      "assumptions": [
+        "Pilot experiment with moderate variance between technical replicates.",
+        "Effect size is framed as a first-pass go or no-go screen rather than publication-ready power."
+      ],
+      "rationale": "A six-vial-per-arm pilot is sufficient to decide whether the trehalose approach deserves protocol optimization and a larger confirmatory study."
+    },
+    "expected_outcome_summary": "If the loading method works, the trehalose arm should show better immediate membrane integrity and at least comparable 24-hour recovery relative to the DMSO control.",
+    "go_no_go_threshold": "Advance only if immediate viability improves by at least 10 percentage points without degrading 24-hour recovery."
+  },
+  "critique": {
+    "overall_soundness": "acceptable",
+    "concerns": [
+      {
+        "id": "concern_loading",
+        "category": "measurement",
+        "severity": "high",
+        "description": "The strongest uncertainty is not the freeze-thaw workflow but the unspecified intracellular trehalose loading method.",
+        "suggestion": "Select and lock one loading strategy before ordering the pilot run, then keep it fixed across all replicates.",
+        "cited_step": 2
+      },
+      {
+        "id": "concern_endpoint",
+        "category": "reproducibility",
+        "severity": "medium",
+        "description": "Immediate viability alone could overstate success if cells fail to recover after replating.",
+        "suggestion": "Keep the 24-hour recovery assay as a required secondary endpoint.",
+        "cited_step": 5
+      }
+    ],
+    "missing_controls": [
+      "Optional fresh unfrozen plating control for contextualizing absolute recovery."
+    ],
+    "missing_considerations": [
+      "Need a decision on whether osmotic preconditioning is part of the trehalose workflow.",
+      "Need a predefined exclusion rule for clumped or partially thawed samples."
+    ],
+    "strengths": [
+      "Direct benchmark against the lab-standard DMSO control.",
+      "Simple readout structure suitable for a fast pilot."
+    ],
+    "reviewer_perspective": "The pilot is defensible as a screening study, but the intervention method must be more explicit before the output can be treated as a reusable protocol.",
+    "reviewed_at": "2026-04-25T22:55:00Z"
+  },
+  "summary": {
+    "tldr": "This example plan compares a trehalose-loading cryopreservation arm against a standard DMSO control in HeLa cells, with immediate post-thaw viability as the main decision point and 24-hour recovery as a guardrail.",
+    "key_decisions": [
+      "Use HeLa cells as the fixed model system.",
+      "Benchmark against standard 10% DMSO rather than a no-cryoprotectant control.",
+      "Treat the experiment as a pilot that decides whether deeper optimization is justified."
+    ],
+    "risk_assessment": [
+      {
+        "risk": "Trehalose loading method is not yet finalized",
+        "likelihood": "high",
+        "impact": "high"
+      },
+      {
+        "risk": "Observed benefit is limited to immediate viability and does not persist into recovery",
+        "likelihood": "medium",
+        "impact": "medium"
+      }
+    ],
+    "novelty_position": "Mechanistically adjacent to prior trehalose cryopreservation work, but still useful as a concrete HeLa-specific comparative pilot."
+  },
+  "status": {
+    "lit_review": {
+      "state": "complete",
+      "completed_at": "2026-04-25T22:42:00Z"
+    },
+    "protocol": {
+      "state": "complete",
+      "completed_at": "2026-04-25T22:48:00Z"
+    },
+    "materials": {
+      "state": "complete",
+      "completed_at": "2026-04-25T22:51:00Z"
+    },
+    "budget": {
+      "state": "complete",
+      "completed_at": "2026-04-25T22:53:00Z"
+    },
+    "timeline": {
+      "state": "complete",
+      "completed_at": "2026-04-25T22:54:00Z"
+    },
+    "validation": {
+      "state": "complete",
+      "completed_at": "2026-04-25T22:54:30Z"
+    },
+    "critique": {
+      "state": "complete",
+      "completed_at": "2026-04-25T22:55:00Z"
+    },
+    "summary": {
+      "state": "complete",
+      "completed_at": "2026-04-25T22:55:20Z"
+    }
+  },
+  "created_at": "2026-04-25T22:40:00Z",
+  "updated_at": "2026-04-25T22:55:20Z",
+  "meta": {
+    "generated_at": "2026-04-25T22:55:20Z",
+    "model_id": "claude-sonnet-4-6",
+    "pipeline_version": "demo-example-v1",
+    "feedback_applied": false,
+    "feedback_session_ids": []
+  }
+}
