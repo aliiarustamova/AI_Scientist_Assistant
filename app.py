@@ -520,11 +520,29 @@ def materials():
     plan.updated_at = completed
     plan_lib.save_plan(plan)
 
+    # Build the FE view first (groups, used_in_steps cross-links),
+    # then enrich with Tavily-sourced supplier/catalog/price. Enrichment
+    # is opt-out via `?enrich=false` for tests + offline dev — the
+    # default is on, since researcher procurement data is the whole
+    # reason this branch exists.
+    fe_view = adapt_materials(materials_out, protocol=plan.protocol)
+
+    enrich_flag = request.args.get("enrich", "true").lower()
+    if enrich_flag not in {"false", "0", "no"}:
+        try:
+            from protocol_pipeline.materials_enrichment import enrich_materials_view
+            fe_view = enrich_materials_view(fe_view)
+        except Exception:
+            # Best-effort. Enrichment failures fall back to the
+            # un-enriched view (FE renders "TBD" / null) rather than
+            # blocking the whole /materials response.
+            traceback.print_exc()
+
     return jsonify({
         "plan_id": plan.id,
         # Pass the protocol so adapt_materials populates `used_in_steps`
         # cross-links from each material to the steps that reference it.
-        "frontend_view": adapt_materials(materials_out, protocol=plan.protocol).model_dump(mode="json"),
+        "frontend_view": fe_view.model_dump(mode="json"),
         "raw": materials_out.model_dump(mode="json"),
     })
 
