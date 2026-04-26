@@ -143,17 +143,23 @@ def _humanize_duration(iso: str | None) -> str | None:
         date_part, time_part = body.split("T", 1)
     else:
         date_part, time_part = body, ""
-    # date_part can have D / W / M / Y; we only see D in practice
+    # date_part can have Y / M / W / D — surface all four so multi-week
+    # protocols (cell-line establishment, breeding crosses, longitudinal
+    # animal work) don't render as missing duration.
     n = ""
     for ch in date_part:
         if ch.isdigit():
             n += ch
             continue
-        if ch == "D" and n:
+        if ch == "Y" and n:
+            out.append(f"{n} y")
+        elif ch == "M" and n:
+            out.append(f"{n} mo")
+        elif ch == "W" and n:
+            out.append(f"{n} wk")
+        elif ch == "D" and n:
             out.append(f"{n} d")
-            n = ""
-        else:
-            n = ""
+        n = ""
     # time_part: H, M, S
     n = ""
     for ch in time_part:

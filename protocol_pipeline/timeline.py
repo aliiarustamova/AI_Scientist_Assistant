@@ -51,7 +51,7 @@ def compute_timeline(protocol: ProtocolGenerationOutput) -> TimelineOutput:
     # numbering (matches ProtocolGenerationOutput.steps[].n).
     flat_step_counter = 1
 
-    for proc in protocol.procedures:
+    for proc_index, proc in enumerate(protocol.procedures, start=1):
         tasks: list[TimelineTask] = []
         n_with_duration = 0
         for step in proc.steps:
@@ -100,14 +100,17 @@ def compute_timeline(protocol: ProtocolGenerationOutput) -> TimelineOutput:
         # Linear pipeline: each phase depends on the previous.
         depends_on = [phases[-1].id] if phases else []
 
+        # `Procedure` doesn't carry a procedure_index field — the index
+        # comes from execution order. enumerate(start=1) above gives us
+        # the canonical 1-based index every phase id and back-link uses.
         phases.append(TimelinePhase(
-            id=f"phase-{proc.procedure_index if hasattr(proc, 'procedure_index') else len(phases) + 1}",
+            id=f"phase-{proc_index}",
             name=proc.name,
             duration=phase_duration,
             tasks=tasks,
             depends_on=depends_on,
             parallel_with=[],   # not auto-detected
-            procedure_index=getattr(proc, "procedure_index", len(phases) + 1),
+            procedure_index=proc_index,
             coverage=round(coverage, 2),
             methodology=methodology,
         ))

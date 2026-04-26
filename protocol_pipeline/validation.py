@@ -162,20 +162,27 @@ def _cohens_d_from_effect(effect: EffectSize, fallback_cv: float = 0.20) -> tupl
         return (d, assumptions)
     if effect.type == "fold_change":
         # log-fold-change; SD assumed cv on log scale. Cohen's d on log
-        # scale: log(fold) / (CV * sqrt(2)).
+        # scale: |log(fold)| / (CV * sqrt(2)). Absolute value so a 0.5x
+        # reduction and a 2x increase produce the same magnitude (an
+        # experiment aiming to halve an outcome is just as powered as
+        # one aiming to double it). Epsilon guard keeps math.log finite
+        # for the degenerate fold=0 case the regex can match.
         try:
-            d = math.log(max(effect.value, 1.0001)) / (cv * math.sqrt(2))
+            d = abs(math.log(max(effect.value, 1e-6))) / (cv * math.sqrt(2))
         except ValueError:
             d = 0.5
         assumptions.append(
-            "Fold-change handled on log scale; assumed log-normal SD."
+            "Fold-change handled on log scale (absolute value, so "
+            "increases and reductions count as the same magnitude); "
+            "assumed log-normal SD."
         )
         return (d, assumptions)
     if effect.type == "odds_ratio":
         # Convert OR to Cohen's d via the Hasselblad-Hedges
-        # log(OR)*sqrt(3)/pi approximation.
+        # |log(OR)|*sqrt(3)/pi approximation. abs() to handle ORs < 1
+        # symmetrically; epsilon guard for OR=0 from a malformed regex.
         try:
-            d = math.log(effect.value) * math.sqrt(3) / math.pi
+            d = abs(math.log(max(effect.value, 1e-6))) * math.sqrt(3) / math.pi
         except ValueError:
             d = 0.5
         return (d, assumptions)
