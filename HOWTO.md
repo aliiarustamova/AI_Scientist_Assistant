@@ -8,14 +8,15 @@ CLI runners for each backend stage, plus the Flask API the frontend talks to.
 
 | Concern | Current implementation | Notes |
 |---|---|---|
-| **Stage 1 lit search** | **Europe PMC** | Free, no auth. ~40M biomedical papers. Returns structured authors, year, journal, plain-text abstract, DOI. No LLM extraction needed for fact fields. |
-| **Stage 2 protocol source** | **protocols.io REST API (live)** via [`protocols_client.py`](protocols_client.py) | Multi-query fan-out + relevance filter; falls back to the cached samples in `pipeline_output_samples/protocols_io/` when offline. |
-| **Stage 3 catalog gap-fill** | **Tavily** scoped to 7 supplier domains | `src/clients/tavily.py` :: `search_for_supplier`. 30-day cache. |
-| **Stage 4 supplier pricing** | Tavily (planned) | Pricing TTL constant + supplier search exist; no `protocol_pipeline/budget.py` yet. |
-| **Stages 5-7** | Pure-LLM (Gemini Flash) with deterministic compute where possible | `timeline.py` is fully deterministic; `validation.py` and `critique.py` use one LLM call each. |
+| **Stage 1 lit search** | **Europe PMC** with multi-query rewrite | Free, no auth. ~40M biomedical papers. LLM emits 1-3 ranked queries (specific → broad); each runs against Europe PMC; results merged + de-duped by PMID/PMCID/DOI before the editorial pass picks 1-3 references. Each ref carries `key_differences[]` (per-reference structured deltas with citations). |
+| **Stage 2 protocol source** | **protocols.io REST API (live)** via [`protocols_client.py`](protocols_client.py) | Multi-query fan-out + relevance filter; falls back to the cached samples in `pipeline_output_samples/protocols_io/` when offline. Researcher candidate-selection flow (`POST /protocol-candidates`) lets the user review + pick 1-3 sources with freeform notes before the architect runs. |
+| **Stage 3 materials enrichment** | **Tavily + LLM** | `protocol_pipeline/materials_enrichment.py`. Every material row is enriched. Two tiers: `confidence: "verified"` (Tavily search + LLM extraction citing `source_url`) or `confidence: "estimate"` (LLM best-guess from training data when Tavily returns nothing usable). FE renders verified items with a `Source ↗` link, estimates with a `BEST-GUESS (LLM)` chip. |
+| **Stage 4 budget** | **Derived on the FE** from enriched material prices | Real per-group USD subtotals on `/plan` summing parseable Tavily-cited prices. Header chip flips to "Partial cost (priced items only)" + "(N/M priced)" markers when coverage is incomplete. Non-USD prices excluded (no implicit currency conversion). |
+| **Stages 5-7** | Pure-LLM (Gemini Flash) with deterministic compute where possible | `timeline.py` is fully deterministic, with strict + partial / lower-bound durations so 80%-covered phases surface `≥ N min` instead of "incomplete"; `validation.py` and `critique.py` use one LLM call each, every output cite-validated. |
+| **AI chat over the plan** | `POST /chat` + `POST /chat/apply` | `chat_pipeline.py`. Single-turn tool-using completion. LLM proposes mutations as Apply / Reject cards (`update_protocol_step`, `add_material`, `update_material`, `remove_material`); applied changes persist to the plan + return updated `frontend_views` so the FE refreshes affected sections in place. |
 | LLM (prototyping) | OpenRouter → `google/gemini-2.5-flash` | Day-to-day dev. Set `LLM_PROVIDER=openrouter` (default). |
 | LLM (production) | Anthropic direct → `claude-sonnet-4-6` | Set `LLM_PROVIDER=anthropic`. Uses prompt caching for the protocols.io context re-used across stages. |
-| Caching | File cache under `.cache/` (per-source subdirs) | 7-day TTL for lit-review, 30-day for catalog gap-fill, 24h for pricing. Re-runs are free. |
+| Caching | File cache under `.cache/` (per-source subdirs) | **24h** TTL for lit-review (multi-query rewrites need fresh ranking when the hypothesis iterates), 30-day for catalog gap-fill, 24h for pricing. Re-runs of identical queries are free. |
 
 **Stage 1 has gone through three backends.** History (most recent first): Europe PMC (current) ← Semantic Scholar (rate-limited too aggressively without a key) ← Tavily (snippets didn't surface bibliographic metadata, forcing LLM extraction and hallucinated authors). The Europe PMC swap eliminated the entire fact-extraction layer.
 
@@ -61,8 +62,8 @@ python run_lr.py --raw
 1. **Loads `.env`** and validates the LLM key for whichever provider `LLM_PROVIDER` is set to.
 2. **Pre-flight smoke test** — fires a pre-baked Tavily query (legacy harness; doesn't reflect the real Stage 1 path anymore — it'll move to a Europe PMC smoke when we get to it).
 3. **Full Stage 1 pipeline** (skipped if `--tavily-only`):
-   - LLM rewrites the structured hypothesis into a Europe PMC search query
-   - Europe PMC search (cached for 7 days)
+   - LLM rewrites the structured hypothesis into 1-3 ranked Europe PMC queries (specific → broad)
+   - Each query → one Europe PMC call; results merged + de-duped by PMID/PMCID/DOI (cached for 24 hours per query)
    - LLM editorial pass: classifies novelty + selects 1–3 references with `description` / `importance` / `matched_on` / `relevance_score`
    - Post-process: HTML strip on titles, summary truncation to 4 sentences
    - Writes a `LitReviewSession` to `ExperimentPlan.lit_review`
@@ -111,8 +112,10 @@ Endpoints:
 | `POST` | `/timeline` | `{"plan_id": "..."}` | `TimelineOutput` (deterministic) |
 | `POST` | `/validation` | `{"plan_id": "..."}` | `ValidationOutput` |
 | `POST` | `/critique` | `{"plan_id": "..."}` | `DesignCritique` |
+| `POST` | `/chat` | `{"plan_id": "...", "page": "/plan", "message": "...", "history": [...]}` | `{message, proposed_mutations[]}` |
+| `POST` | `/chat/apply` | `{"plan_id": "...", "mutations": [...]}` | `{applied_ids[], errors[], frontend_views{...}}` |
 
-Stage 4 (`/budget`) and Stage 8 (`/summary`) are not yet exposed.
+Budget is computed on the FE from Tavily-enriched material prices (no `/budget` endpoint). Stage 8 (`/summary`) is not yet exposed.
 
 Sample request:
 

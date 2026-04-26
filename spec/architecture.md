@@ -1,6 +1,11 @@
 # AI Scientist Assistant — Architecture
 
-> **Implementation status:** Stages 1, 2, 3, 5, 6, 7 ship today. Stage 4 (Budget) and Stage 8 (Summary) are the remaining gaps — both have type contracts here and (for Budget) supplier-search infrastructure already wired in `src/clients/tavily.py`. Two bonus features beyond the spec: a server-rendered protocol PDF and a researcher candidate-selection flow exposed at `POST /protocol-candidates`.
+> **Implementation status:** Stages 1, 2, 3, 5, 6, 7 ship today, plus a real per-group budget computed on the FE from the Tavily-enriched material prices (Stage 4 territory, no separate pipeline module). Stage 8 (Summary) is the remaining gap. Bonus features beyond the spec:
+> - **AI Assistant chat** (`POST /chat` + `POST /chat/apply`) — propose-then-apply over the experiment-plan blackboard, schema-validated tool calls, server-rendered diff that refreshes affected page sections in place.
+> - **Researcher candidate-selection flow** — `POST /protocol-candidates` + dedicated `/candidates` page for picking 1-3 sources with freeform notes before the architect runs.
+> - **Server-rendered protocol PDF** — `POST /protocol/pdf` via reportlab.
+> - **Materials enrichment with confidence tiers** — `verified` (Tavily-cited supplier page) vs `estimate` (LLM best-guess from training data); every row gets one tier, never blank `TBD`.
+> - **Multi-query lit-review rewrite** — 1-3 ranked queries (specific → broad), de-duped union as the candidate pool; `queries_tried[]` surfaced on the FE.
 
 ## Stack
 
@@ -13,7 +18,7 @@
 | Backend / API | Flask + flask-cors | Currently the runtime — exposes one endpoint per shipped stage. |
 | Plan storage | JSON files under `plans/` | Current; the blackboard is one inspectable document per run. **Supabase + pgvector remains the planned upgrade** for shared state and embedding search but is not in use yet. |
 | Stage 1 lit search | Europe PMC | Free, no auth. Biomedical-specific. **Implementation note:** original spec called for Tavily here, but Tavily snippets didn't reliably surface bibliographic metadata, so we swapped to Europe PMC (which returns structured authors/year/venue/abstract/DOI). |
-| Web search + extract | Tavily | Stages 3 (catalog gap-fill) and 4 (supplier pricing). Hackathon credit `TVLY-HF9ETJRW`. |
+| Web search + extract | Tavily | Stage 3 primary materials enrichment (every reagent / equipment row gets supplier + catalog + price citing `source_url`); Stage 3 / 4 price-fallback via `search_for_pricing` raw-content extraction. Hackathon credit `TVLY-HF9ETJRW`. |
 | LLM (prototyping) | OpenRouter → `google/gemini-2.5-flash` | Default for dev iteration: cheap, fast, swap models freely via one gateway |
 | LLM (production) | Anthropic direct → Claude Sonnet 4.6 | Higher quality and reliability for the demo/production runs; uses Anthropic SDK directly with prompt caching |
 | Protocol data source | protocols.io REST API | Source of truth for protocol content |
