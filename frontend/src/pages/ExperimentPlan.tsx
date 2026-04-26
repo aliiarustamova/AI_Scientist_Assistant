@@ -902,9 +902,18 @@ const ExperimentPlan = () => {
       plan_id?: string;
       structured?: StructuredHypothesis;
       domain?: string;
+      // Phase F: forwarded from /candidates. When present, /protocol
+      // skips its own ranked search and grounds Stage 2 on exactly the
+      // protocols the researcher picked, with `researcher_notes`
+      // threaded into the architect + writer prompts as binding
+      // override.
+      selected_protocol_ids?: string[];
+      researcher_notes?: string;
     } | null) ?? null;
   const incomingPlanId = navState?.plan_id;
   const incomingStructured = navState?.structured;
+  const incomingSelectedIds = navState?.selected_protocol_ids;
+  const incomingNotes = navState?.researcher_notes;
 
   // Section reveal index: 0 nothing, 1 protocol, 2 + materials, 3 + budget+timeline, 4 + validation+feasibility.
   // Real-API path advances reveal as each backend call resolves; mock path
@@ -943,9 +952,24 @@ const ExperimentPlan = () => {
     // shows two stages (Protocol, Materials), so we map them onto stageIdx
     // and bump `reveal` as each section's data arrives.
     const ac = new AbortController();
+    // Build /protocol body. Forward the researcher's candidate
+    // selection + notes when /candidates handed them off — this is
+    // what makes the page actually use the human-in-the-loop pick.
     const protoBody = incomingPlanId
-      ? { plan_id: incomingPlanId }
-      : { structured: incomingStructured! };
+      ? {
+          plan_id: incomingPlanId,
+          ...(incomingSelectedIds && incomingSelectedIds.length > 0
+            ? { selected_protocol_ids: incomingSelectedIds }
+            : {}),
+          ...(incomingNotes ? { researcher_notes: incomingNotes } : {}),
+        }
+      : {
+          structured: incomingStructured!,
+          ...(incomingSelectedIds && incomingSelectedIds.length > 0
+            ? { selected_protocol_ids: incomingSelectedIds }
+            : {}),
+          ...(incomingNotes ? { researcher_notes: incomingNotes } : {}),
+        };
     const matsBody = (planId: string) => ({ plan_id: planId });
 
     setStageIdx(0);
@@ -1015,7 +1039,7 @@ const ExperimentPlan = () => {
     })();
 
     return () => ac.abort();
-  }, [incomingPlanId, incomingStructured, useMockData]);
+  }, [incomingPlanId, incomingStructured, incomingSelectedIds, incomingNotes, useMockData]);
 
   // Display data: prefer backend-driven; fall back to mock constants for
   // mock-only mode or if a section's API call hasn't resolved yet. The

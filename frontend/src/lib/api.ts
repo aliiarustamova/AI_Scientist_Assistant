@@ -401,8 +401,50 @@ export type StageRequest =
   | { plan_id: string }
   | { structured: StructuredHypothesis; domain?: string };
 
-export function postProtocol(body: StageRequest, signal?: AbortSignal): Promise<ProtocolResponse> {
+// /protocol additionally accepts the researcher-in-the-loop fields from
+// the candidate-selection screen. When `selected_protocol_ids` is
+// present, the backend skips its own ranked search and uses exactly
+// those protocols as Stage 2 sources. `researcher_notes` is freeform
+// guidance threaded into the architect + writer prompts.
+export type ProtocolRequest = StageRequest & {
+  selected_protocol_ids?: string[];
+  researcher_notes?: string;
+};
+
+export function postProtocol(body: ProtocolRequest, signal?: AbortSignal): Promise<ProtocolResponse> {
   return postJson("/protocol", body, signal);
+}
+
+// ----- /protocol-candidates response (researcher selection screen) -------
+// One LLM-assisted live search against protocols.io. Returns 3-5 ranked
+// candidates the researcher reviews before Stage 2 generates the protocol.
+// `queries_tried` and `query_used` are surfaced so the user can see
+// what the auto-extractor searched for and adjust expectations.
+
+export type ProtocolCandidate = {
+  id: string;
+  title: string;
+  description?: string;
+  url?: string;
+  doi?: string;
+  language: string;          // ISO 639-1 code (en, es, fr, …)
+  step_count: number;
+  relevance_score: number;   // 0..1
+  relevance_reason: string;  // one-line LLM rationale
+};
+
+export type ProtocolCandidatesResponse = {
+  plan_id: string;
+  query_used: string;
+  queries_tried: string[];
+  candidates: ProtocolCandidate[];
+};
+
+export function postProtocolCandidates(
+  body: StageRequest,
+  signal?: AbortSignal,
+): Promise<ProtocolCandidatesResponse> {
+  return postJson("/protocol-candidates", body, signal);
 }
 
 export function postMaterials(body: StageRequest, signal?: AbortSignal): Promise<MaterialsResponse> {
