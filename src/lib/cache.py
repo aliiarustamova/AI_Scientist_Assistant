@@ -19,18 +19,30 @@ CACHE_DIR = Path(".cache")
 
 
 def _key(namespace: str, payload: dict[str, Any]) -> str:
-    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    # default=str gives us a safe fallback if a caller ever passes a payload
+    # containing non-JSON-native types like datetime, UUID, or Path. Since
+    # those types' str() is stable, the cache key stays deterministic.
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
     digest = hashlib.sha256(canonical.encode()).hexdigest()
     return f"{namespace}/{digest}.json"
 
 
 def get(namespace: str, payload: dict[str, Any], ttl_seconds: int) -> Any | None:
     path = CACHE_DIR / _key(namespace, payload)
-    if not path.exists():
+    # Use stat() directly instead of an exists() pre-check to avoid a TOCTOU
+    # race (file could be deleted between exists() and stat() by a concurrent
+    # writer or a manual cache wipe). FileNotFoundError on either stat() or
+    # read_text() is the same outcome: cache miss.
+    try:
+        mtime = path.stat().st_mtime
+    except FileNotFoundError:
         return None
-    if time.time() - path.stat().st_mtime > ttl_seconds:
+    if time.time() - mtime > ttl_seconds:
         return None
-    return json.loads(path.read_text(encoding="utf-8"))
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
 
 
 def put(namespace: str, payload: dict[str, Any], value: Any) -> None:
