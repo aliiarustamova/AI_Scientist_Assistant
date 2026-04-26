@@ -43,10 +43,12 @@ from src.types import (
 
 from .architect import ProtocolOutline, plan_outline
 from .materials import roll_up_materials
-from .relevance import filter_relevant
+from .relevance import filter_relevant, score_protocols
 from .sources import (
     NormalizedProtocol,
+    ProtocolCandidate,
     fetch_live_candidates,
+    fetch_one_protocol,
     load_all_samples,
 )
 from .writer import write_procedures_parallel
@@ -226,10 +228,66 @@ class StageResult:
 # Public entry points
 # --------------------------------------------------------------------------
 
+def fetch_candidates_for_hypothesis(
+    hypothesis: Hypothesis,
+    *,
+    limit: int = 5,
+) -> tuple[list[ProtocolCandidate], list[str], Optional[str]]:
+    """Fetch protocols.io candidates for the FE selection screen and
+    score them with the relevance filter so the user sees a useful
+    pick-list. Returns (candidates, queries_tried, query_used).
+
+    Tries the LLM-extracted ranked queries broad-to-specific until one
+    returns hits; `query_used` is None when nothing worked. The
+    candidates are ranked by relevance score descending — researchers
+    can use the score + reason to decide which to keep."""
+    queries = _query_for_hypothesis(hypothesis)
+    queries_tried: list[str] = []
+    found: dict[str, NormalizedProtocol] = {}
+    query_used: Optional[str] = None
+    for q in queries:
+        queries_tried.append(q)
+        live = fetch_live_candidates(q, limit=limit)
+        if live:
+            found = live
+            query_used = q
+            break
+
+    if not found:
+        return [], queries_tried, None
+
+    # Score them with the relevance filter so we can sort + show reasons.
+    # NOTE: score_protocols (NOT filter_relevant) — we want EVERY
+    # candidate scored, even low-scoring ones. The user picks; we don't
+    # silently drop options.
+    scored = score_protocols(hypothesis, list(found.values()))
+
+    candidates: list[ProtocolCandidate] = []
+    for sp in scored:
+        p = sp.protocol
+        candidates.append(ProtocolCandidate(
+            id=p.id,
+            title=p.title,
+            description=p.description,
+            url=p.url,
+            doi=p.doi,
+            language=p.language,
+            step_count=len(p.steps),
+            relevance_score=round(sp.score.score, 2),
+            relevance_reason=sp.score.reason,
+        ))
+
+    # Sort by relevance descending; ties keep API order.
+    candidates.sort(key=lambda c: c.relevance_score, reverse=True)
+    return candidates, queries_tried, query_used
+
+
 def run_protocol_only(
     hypothesis: Hypothesis,
     *,
     sources: list[NormalizedProtocol] | None = None,
+    selected_protocol_ids: Optional[list[str]] = None,
+    researcher_notes: Optional[str] = None,
     relevance_threshold: float = 0.2,
     max_writer_workers: int = 5,
 ) -> tuple[ProtocolGenerationOutput, ProtocolOutline]:
@@ -238,17 +296,30 @@ def run_protocol_only(
     fetch materials in a separate request. Returns the protocol output
     and the intermediate outline (kept for debugging / sample dumps).
 
-    Source resolution (when `sources` is not explicitly provided):
-      1. Try a live protocols.io fetch using the hypothesis subject as
-         the search query (single-concept queries score better against
-         protocols.io's AND'd-token search than verbose hypotheses).
-      2. If that returns nothing — token missing, network down, no
-         matches, etc. — fall back to the static samples committed to
-         the repo. Tests + offline dev keep working.
-      3. If both empty, the architect / writer agents synthesize from
-         common knowledge alone (still produces a usable protocol;
-         the confidence banner reflects the lack of grounding).
-    """
+    Source resolution priority:
+      1. `sources` explicitly provided — use those, skip auto-resolution.
+      2. `selected_protocol_ids` provided — fetch each by ID via the
+         protocols.io client (the user already chose them on the FE).
+         Skips relevance filtering since the user pre-filtered.
+      3. Otherwise, try ranked LLM-extracted queries broad-to-specific
+         until one returns hits; falls back to static samples if all
+         queries return nothing.
+
+    `researcher_notes` is freeform supplemental guidance from the user
+    ("focus on the cryoprotectant ratio; assume HeLa cells; don't
+    bother with the freezing rate") that gets threaded into both the
+    architect prompt and the writer prompts so the generated protocol
+    reflects their intent."""
+    if sources is None and selected_protocol_ids:
+        # User pre-selected candidates from /protocol-candidates. Re-
+        # hydrate them by ID; skip relevance filtering since the user
+        # already filtered.
+        sources = []
+        for pid in selected_protocol_ids:
+            norm = fetch_one_protocol(pid)
+            if norm is not None:
+                sources.append(norm)
+
     if sources is None:
         # Try ranked candidate queries until one returns hits. The query
         # extractor outputs broad-to-specific so we don't lock onto a
@@ -268,17 +339,27 @@ def run_protocol_only(
             # banner will reflect the lack of grounding.
             sources = list(load_all_samples().values())
 
-    # 1. Relevance filter
-    scored = filter_relevant(hypothesis, sources, keep_threshold=relevance_threshold)
+    # 1. Relevance filter — when user pre-selected, all sources pass
+    # through with their explicit endorsement (researcher said "use these"),
+    # so we score-but-don't-filter to retain ordering for the architect.
+    if selected_protocol_ids and sources:
+        scored = score_protocols(hypothesis, sources)
+        scored.sort(key=lambda sp: sp.score.score, reverse=True)
+    else:
+        scored = filter_relevant(hypothesis, sources, keep_threshold=relevance_threshold)
 
-    # 2. Architect
-    outline = plan_outline(hypothesis, scored)
+    # 2. Architect (researcher_notes threads through to influence the
+    # outline if provided)
+    outline = plan_outline(hypothesis, scored, researcher_notes=researcher_notes)
 
-    # 3. Procedure writers (parallel)
+    # 3. Procedure writers (parallel) — researcher_notes propagates to
+    # each writer agent so per-procedure decisions reflect the user's
+    # supplemental guidance.
     sources_by_id = {p.id: p for p in sources}
     procedures = write_procedures_parallel(
         hypothesis, outline.procedures, sources_by_id,
         max_workers=max_writer_workers,
+        researcher_notes=researcher_notes,
     )
 
     # 4. Compute total_duration per procedure (deterministic sum of step

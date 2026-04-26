@@ -275,6 +275,80 @@ def _bundle_to_normalized(
     )
 
 
+class ProtocolCandidate(BaseModel):
+    """Lightweight summary the FE shows in the candidate-selection screen.
+    Holds enough to populate a card (title, description, URL, language,
+    step count) plus the relevance filter's verdict so the user has
+    grounding for their pick."""
+    id: str
+    title: str
+    description: Optional[str] = None
+    url: Optional[str] = None
+    doi: Optional[str] = None
+    language: str
+    step_count: int
+    relevance_score: float       # 0..1
+    relevance_reason: str        # one-line LLM rationale
+
+
+def fetch_one_protocol(protocol_id: str) -> Optional[NormalizedProtocol]:
+    """Fetch a single protocol by ID via Vip's client and return its
+    normalized form. Used by /protocol when the user has pre-selected
+    candidate IDs from /protocol-candidates and we need to re-hydrate
+    them for the pipeline. Returns None on any failure (network, bad
+    ID, empty steps)."""
+    try:
+        from protocols_client import (
+            search_protocols,  # only used to grab metadata; cheap
+            get_protocol_steps,
+        )
+    except Exception:
+        return None
+
+    pid = str(protocol_id).strip()
+    if not pid:
+        return None
+
+    # We don't have a /api/v3/protocols/{id} read-by-id wrapper in Vip's
+    # client, so we fetch steps directly (which works) and derive title /
+    # description from the steps' protocol metadata if available, or
+    # leave the candidate's stored copy. The caller usually already has
+    # title/description from a prior /protocol-candidates response —
+    # this function is intentionally minimal.
+    try:
+        steps = get_protocol_steps(pid)
+    except Exception:
+        return None
+
+    if not steps:
+        return None
+
+    norm_steps: list[NormalizedStep] = []
+    for s in steps:
+        body = (s.get("description") or "").strip()
+        if not body:
+            continue
+        number = s.get("step_number")
+        norm_steps.append(NormalizedStep(
+            id=f"{pid}-{number or len(norm_steps)+1}",
+            section="",
+            number=str(number or ""),
+            text=body,
+        ))
+
+    return NormalizedProtocol(
+        id=pid,
+        title="",                # caller fills from candidate metadata
+        description=None,
+        doi=None,
+        url=None,
+        authors=[],
+        language=detect_language(" ".join(s.text for s in norm_steps[:3])),
+        materials_text="",
+        steps=norm_steps,
+    )
+
+
 def fetch_live_candidates(
     query: str,
     *,
