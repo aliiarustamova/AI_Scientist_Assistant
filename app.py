@@ -109,6 +109,7 @@ def lit_review():
         # Pydantic gives field-level errors; surface them so FE can highlight.
         return jsonify({"error": "validation_error", "detail": exc.errors()}), 422
 
+    plan = None
     try:
         plan = plan_lib.create_plan(hypothesis, model_id=llm.model_id())
         plan.status["lit_review"] = StageStatusRunning(started_at=now())
@@ -128,8 +129,9 @@ def lit_review():
         traceback.print_exc()
         # Try to mark the plan as failed if we got that far.
         try:
-            plan.status["lit_review"] = StageStatusFailed(failed_at=now(), error=str(exc))
-            plan_lib.save_plan(plan)
+            if plan is not None:
+                plan.status["lit_review"] = StageStatusFailed(failed_at=now(), error=str(exc))
+                plan_lib.save_plan(plan)
         except Exception:
             pass
         return jsonify({"error": "pipeline_error", "detail": str(exc)}), 500

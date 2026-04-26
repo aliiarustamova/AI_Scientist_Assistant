@@ -146,3 +146,19 @@ def test_pipeline_error_returns_500(client, monkeypatch):
     body = r.get_json()
     assert body["error"] == "pipeline_error"
     assert "upstream blew up" in body["detail"]
+
+
+def test_create_plan_failure_returns_500_cleanly(client, monkeypatch):
+    """If plan creation itself raises (before the runner is reached), the
+    except handler must NOT explode trying to mark a non-existent plan as
+    failed. Exercises the `if plan is not None` guard.
+    """
+    def _broken_create(hypothesis, model_id):
+        raise RuntimeError("disk full")
+    monkeypatch.setattr(flask_app.plan_lib, "create_plan", _broken_create)
+
+    r = client.post("/lit-review", json=_valid_body())
+    assert r.status_code == 500
+    body = r.get_json()
+    assert body["error"] == "pipeline_error"
+    assert "disk full" in body["detail"]
