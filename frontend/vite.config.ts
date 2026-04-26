@@ -5,11 +5,14 @@ import { componentTagger } from "lovable-tagger";
 
 // https://vitejs.dev/config/
 export default defineConfig(({ mode }) => {
-  // Repo root .env: set VITE_DEV_BACKEND to match `PORT=... python3 app.py` (e.g. http://127.0.0.1:8000). Flask’s default is 5000 if PORT is unset.
+  // Repo root .env: set VITE_DEV_BACKEND to override the Flask URL the vite
+  // proxy targets (e.g. http://127.0.0.1:8000 when running Flask under a
+  // non-default port). Default matches `python app.py` with PORT unset
+  // (Flask binds to 5000) — the path of least surprise.
   const env = loadEnv(mode, path.resolve(__dirname, ".."), "");
   const devBackend =
     (env.VITE_DEV_BACKEND && env.VITE_DEV_BACKEND.trim()) ||
-    "http://127.0.0.1:8000";
+    "http://127.0.0.1:5000";
 
   return {
   server: {

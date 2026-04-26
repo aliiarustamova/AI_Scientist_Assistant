@@ -394,18 +394,29 @@ function formatApiErrorMessage(body: ApiError): string {
 // ----- Internals ---------------------------------------------------------
 
 async function postJson<T>(path: string, body: unknown, signal?: AbortSignal): Promise<T> {
-  const res = await fetch(apiUrl(path), {
+  const target = apiUrl(path);
+  const res = await fetch(target, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
     signal,
   });
   if (!res.ok) {
+    // Surface the resolved request URL + response Content-Type. Most
+    // mystery 500s in this stack turn out to be a misconfigured deploy
+    // hitting a stale or non-existent BE. Showing the URL lets a user
+    // see "ah, this is hitting api-stale.example.com" in one glance.
+    const contentType = res.headers.get("content-type") || "(no content-type)";
     let parsed: ApiError;
     try {
       parsed = await res.json();
     } catch {
-      parsed = { error: "network_error", detail: `HTTP ${res.status}` };
+      parsed = {
+        error: "network_error",
+        detail: `HTTP ${res.status} from ${target} (content-type: ${contentType}). ` +
+                `If this is unexpected, check VITE_API_BASE on the deployed FE ` +
+                `or run the BE locally on port 5000.`,
+      };
     }
     throw new ApiException(res.status, parsed);
   }
