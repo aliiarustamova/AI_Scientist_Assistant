@@ -590,19 +590,66 @@ const ReviewRefine = () => {
                 <ArrowRight className="h-4 w-4 rotate-180 transition-transform group-hover:-translate-x-0.5" strokeWidth={1.75} />
                 Back to plan
               </button>
-              <span aria-hidden className="hidden h-4 w-px bg-rule sm:block" />
-              <Button
-                variant="outline"
-                className="h-12 gap-2 rounded-sm border-rule bg-paper px-5 text-[13px] font-medium text-ink hover:bg-rule-soft/40"
-                onClick={() => {
-                  /* mock */
-                }}
-              >
-                <Download className="h-4 w-4" strokeWidth={1.75} />
-                <span className="font-mono-notebook text-[11px] uppercase tracking-[0.18em]">
-                  Download plan (PDF)
-                </span>
-              </Button>
+              {/* Download button — only render when there's an active
+                  plan in sessionStorage. After a hard-refresh, router
+                  state is gone and there's no plan_id to send to the
+                  BE; showing a button that errors on click is worse
+                  than hiding it. The chat panel uses the same
+                  getActivePlanId() check (read inline here to avoid
+                  circular import noise). */}
+              {(() => {
+                let activePlanId: string | null = null;
+                try {
+                  activePlanId = window.sessionStorage.getItem("praxis:active_plan_id");
+                } catch {
+                  activePlanId = null;
+                }
+                if (!activePlanId) return null;
+                return (
+                  <>
+                    <span aria-hidden className="hidden h-4 w-px bg-rule sm:block" />
+                    <Button
+                      variant="outline"
+                      className="h-12 gap-2 rounded-sm border-rule bg-paper px-5 text-[13px] font-medium text-ink hover:bg-rule-soft/40"
+                      onClick={async () => {
+                        try {
+                          const res = await fetch("/protocol/pdf", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ plan_id: activePlanId }),
+                          });
+                          if (!res.ok) {
+                            // 404 / 400 — plan went missing or
+                            // protocol not run. Silent failure here
+                            // is fine; the user can navigate back to
+                            // /plan and retry.
+                            return;
+                          }
+                          const blob = await res.blob();
+                          const cd = res.headers.get("Content-Disposition") || "";
+                          const m = /filename="?([^";]+)"?/i.exec(cd);
+                          const filename = m?.[1] || "protocol.pdf";
+                          const url = URL.createObjectURL(blob);
+                          const a = document.createElement("a");
+                          a.href = url;
+                          a.download = filename;
+                          document.body.appendChild(a);
+                          a.click();
+                          document.body.removeChild(a);
+                          URL.revokeObjectURL(url);
+                        } catch {
+                          /* ignore — user can retry from /plan */
+                        }
+                      }}
+                    >
+                      <Download className="h-4 w-4" strokeWidth={1.75} />
+                      <span className="font-mono-notebook text-[11px] uppercase tracking-[0.18em]">
+                        Download plan (PDF)
+                      </span>
+                    </Button>
+                  </>
+                );
+              })()}
               <p className="hidden font-mono-notebook text-[11px] uppercase tracking-[0.2em] text-muted-foreground sm:block">
                 {phase === "incorporating"
                   ? "Incorporating feedback…"

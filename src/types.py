@@ -344,10 +344,24 @@ class TimelinePhase(BaseModel):
     """A logical group of timeline tasks — currently 1:1 with procedures.
     `coverage` is the fraction of tasks with duration data; `methodology`
     is a one-line plain-English description of how `duration` was
-    computed (so the user can audit / reproduce)."""
+    computed (so the user can audit / reproduce).
+
+    Two duration fields:
+      - `duration`: STRICT sum — populated only when every step has a
+        parseable duration. Stays None when even one step is missing
+        or unparseable. Use this when you need a sum that's known to
+        be complete.
+      - `partial_duration`: BEST-EFFORT lower-bound — sum of whatever
+        parseable durations were available, regardless of coverage.
+        Always populated when at least one step has a parseable
+        duration. Use this for FE display when you want to show
+        SOMETHING informative ("≥ 56 min") rather than a blanket
+        "incomplete" chip.
+    """
     id: str                         # "phase-{procedure_index}"
     name: str                       # procedure.name
-    duration: Optional[str] = None  # sum of task durations; None if any missing
+    duration: Optional[str] = None  # strict sum; None if any step missing/unparseable
+    partial_duration: Optional[str] = None  # lower-bound: sum of parseable durations
     tasks: list[TimelineTask]
     depends_on: list[str] = Field(default_factory=list)
     parallel_with: list[str] = Field(default_factory=list)
@@ -360,9 +374,17 @@ class TimelinePhase(BaseModel):
 class TimelineOutput(BaseModel):
     """Stage 5 output. Deterministic; same protocol -> same timeline.
     `assumptions` documents what the compute does NOT cover (hands-on
-    time, parallelization opportunities, calendar constraints)."""
+    time, parallelization opportunities, calendar constraints).
+
+    Same two-tier total as TimelinePhase: `total_duration` is strict
+    (None when any phase is partial); `partial_total_duration` is the
+    lower-bound across whatever phases had parseable data. The FE
+    renders the partial total prefixed with "≥" so users see a useful
+    floor rather than "estimate incomplete".
+    """
     phases: list[TimelinePhase]
-    total_duration: Optional[str] = None  # ISO 8601 sum across phases
+    total_duration: Optional[str] = None  # strict sum across phases (None if any partial)
+    partial_total_duration: Optional[str] = None  # lower-bound across all available phase data
     critical_path: list[str]              # phase IDs in dependency order
     assumptions: list[str] = Field(default_factory=list)
     earliest_completion_date: Optional[str] = None

@@ -425,11 +425,22 @@ def enrich_one_item(item: FEReagent) -> FEReagent:
 
     extracted = _extract_one(name, item.purpose or "", results)
 
-    # Apply only when we got a non-null source URL; otherwise leave the
-    # item's existing values (the model_copy below is a no-op when
-    # everything is None).
+    # Tavily verified path failed. Fall back to a single LLM call for a
+    # best-guess so the FE has SOMETHING to display. Marked as
+    # confidence="estimate" + no source_url so users see a "BEST-GUESS"
+    # badge and know it isn't web-verified.
     if not extracted["source_url"]:
-        return item
+        guess = _llm_estimate(name, item.purpose or "")
+        if not (guess["supplier"] or guess["catalog"] or guess["price"]):
+            return item
+        updates: dict[str, Any] = {"confidence": "estimate"}
+        if guess["supplier"]:
+            updates["supplier"] = guess["supplier"]
+        if guess["catalog"]:
+            updates["catalog"] = guess["catalog"]
+        if guess["price"]:
+            updates["price"] = guess["price"]
+        return item.model_copy(update=updates)
 
     # Pass 2: price fallback. Only fire when we have enough to make
     # a focused search (supplier + catalog) AND price is still null.
@@ -447,7 +458,10 @@ def enrich_one_item(item: FEReagent) -> FEReagent:
 
     # Don't clobber an existing supplier/catalog with None — the
     # original adapt_materials may have populated those from the BE.
-    updates: dict[str, Any] = {"source_url": extracted["source_url"]}
+    updates: dict[str, Any] = {
+        "source_url": extracted["source_url"],
+        "confidence": "verified",
+    }
     if extracted["supplier"]:
         updates["supplier"] = extracted["supplier"]
     if extracted["catalog"]:
@@ -456,6 +470,68 @@ def enrich_one_item(item: FEReagent) -> FEReagent:
         updates["price"] = extracted["price"]
 
     return item.model_copy(update=updates)
+
+
+# --------------------------------------------------------------------------
+# LLM best-guess fallback (no web citation)
+# --------------------------------------------------------------------------
+# When Tavily returns nothing usable, fall back to a single LLM call
+# that asks the model to make a best-guess from its training data.
+# This is explicitly LOWER tier than the Tavily-verified extractor —
+# the FE renders these with a "BEST-GUESS" badge and no Source link
+# so users know they're seeing an estimate, not a verified citation.
+
+ESTIMATE_SYSTEM = """You are a lab procurement assistant. The user will give you the name of a material a lab needs and (optionally) what it's used for. Make your single best guess at:
+  - supplier  (most likely vendor — Sigma-Aldrich, ThermoFisher, Promega, Qiagen for reagents; ADInstruments, BIOPAC, IKA, Eppendorf for equipment; McMaster-Carr, Grainger, Amazon, Best Buy for general / facility / consumer items)
+  - catalog   (a plausible SKU / catalog number — your best recollection or a representative product. If genuinely unsure, leave null but still fill supplier + price)
+  - price     (rough USD list price WITH pack size or unit, e.g. "$48 / 500 g", "$220 / kit", "$350 / unit", "$80 / pack of 100")
+
+Be GENEROUS, not conservative. The user explicitly wants this filled in even when it's a guess. Two examples:
+  - "Comfortable reclined chair" → {"supplier": "McMaster-Carr or Amazon", "catalog": null, "price": "$200-500 / unit"}
+  - "Sound-dampened room" → {"supplier": "(facility — not procurable)", "catalog": null, "price": "(in-house facility cost)"}
+  - "External hard drive" → {"supplier": "Best Buy / Amazon", "catalog": "WDBA3A0040BBK or similar", "price": "$120 / 4 TB"}
+
+Only return all-null when the input is genuinely meaningless or empty. Items you can't easily price still get a supplier guess and a "(facility)" or "(varies)" price marker so the user sees SOMETHING.
+
+Return ONLY a single valid JSON object:
+{
+  "supplier": "string | null",
+  "catalog": "string | null",
+  "price": "string | null"
+}"""
+
+
+def _llm_estimate(name: str, purpose: str) -> dict[str, Optional[str]]:
+    """Single LLM call for best-guess procurement data when Tavily
+    returned nothing. Lower-tier output: no source URL, marked as
+    "estimate" so the FE renders a BEST-GUESS badge."""
+    null_result: dict[str, Optional[str]] = {
+        "supplier": None, "catalog": None, "price": None,
+    }
+    user = f"Material: {name}\nPurpose: {purpose or '(not specified)'}"
+    try:
+        parsed = llm.complete_json(ESTIMATE_SYSTEM, user, agent_name="Materials estimate")
+    except Exception as exc:
+        _LOG.warning("Materials estimate LLM call failed for %r: %s", name, exc)
+        return null_result
+    if not isinstance(parsed, dict):
+        return null_result
+
+    def _clean(v: Any) -> Optional[str]:
+        if v is None:
+            return None
+        s = str(v).strip()
+        if not s or s.lower() in {"null", "none", "n/a", "tbd", "-"}:
+            return None
+        if len(s) > 200:
+            s = s[:200] + "…"
+        return s
+
+    return {
+        "supplier": _clean(parsed.get("supplier")),
+        "catalog": _clean(parsed.get("catalog")),
+        "price": _clean(parsed.get("price")),
+    }
 
 
 # --------------------------------------------------------------------------
