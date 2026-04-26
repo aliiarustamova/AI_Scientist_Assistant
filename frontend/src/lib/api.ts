@@ -10,10 +10,28 @@
  *                      /protocol; requires the plan to have a protocol
  *                      already populated when chaining via plan_id.
  *
- * In dev, vite.config.ts proxies these paths to http://localhost:5000.
- * In production we expect same-origin or a reverse proxy upstream — so
- * URLs stay relative regardless of environment.
+ * In dev, vite.config.ts proxies these paths to your local Flask (see
+ * VITE_DEV_BACKEND in the repo root .env). In production on Vercel, set
+ * VITE_API_BASE to your API origin (e.g. https://api.yourapp.com) on the
+ * Vercel project (build-time env). Omitted/empty = same origin (relative
+ * URLs), e.g. when the API is on the same host behind a reverse proxy.
  */
+
+// ----- API base (optional external backend) --------------------------------
+
+/** Production: set in Vercel to your Flask public URL, no trailing slash. */
+function getApiBase(): string {
+  const raw = import.meta.env.VITE_API_BASE;
+  if (typeof raw === "string" && raw.trim()) {
+    return raw.replace(/\/+$/, "");
+  }
+  return "";
+}
+
+export function apiUrl(path: string): string {
+  const p = path.startsWith("/") ? path : `/${path}`;
+  return `${getApiBase()}${p}`;
+}
 
 // ----- Shared types (mirror backend Pydantic) -----------------------------
 
@@ -376,7 +394,7 @@ function formatApiErrorMessage(body: ApiError): string {
 // ----- Internals ---------------------------------------------------------
 
 async function postJson<T>(path: string, body: unknown, signal?: AbortSignal): Promise<T> {
-  const res = await fetch(path, {
+  const res = await fetch(apiUrl(path), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),

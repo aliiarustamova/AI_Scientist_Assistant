@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import {
   CHAT_APPLIED_EVENT,
+  apiUrl,
   postCritique,
   postMaterials,
   postProtocol,
@@ -1708,7 +1709,7 @@ const ExperimentPlan = () => {
                       if (!planForPdf || pdfDownloading) return;
                       setPdfDownloading(true);
                       try {
-                        const res = await fetch("/protocol/pdf", {
+                        const res = await fetch(apiUrl("/protocol/pdf"), {
                           method: "POST",
                           headers: { "Content-Type": "application/json" },
                           body: JSON.stringify({ plan_id: planForPdf }),

@@ -15,7 +15,7 @@ import { Button } from "@/components/ui/button";
 import type { ReviewRefineSnapshot } from "@/lib/buildReviewSnapshot";
 import { REVIEW_SNAPSHOT_KEY } from "@/lib/buildReviewSnapshot";
 import { composeHypothesisQuestion } from "@/lib/hypothesis";
-import { getWorkflowPlanId } from "@/lib/api";
+import { apiUrl, getWorkflowPlanId } from "@/lib/api";
 import { getStoredWorkflowStructured } from "@/lib/workflowContext";
 
 type SectionKey = "protocol" | "materials" | "budget" | "timeline";
@@ -654,7 +654,7 @@ const ReviewRefine = () => {
                       className="h-12 gap-2 rounded-sm border-rule bg-paper px-5 text-[13px] font-medium text-ink hover:bg-rule-soft/40"
                       onClick={async () => {
                         try {
-                          const res = await fetch("/protocol/pdf", {
+                          const res = await fetch(apiUrl("/protocol/pdf"), {
                             method: "POST",
                             headers: { "Content-Type": "application/json" },
                             body: JSON.stringify({ plan_id: activePlanId }),
