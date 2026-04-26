@@ -227,3 +227,93 @@ def load_all_samples() -> dict[str, NormalizedProtocol]:
         if norm is not None:
             out[path.stem] = norm
     return out
+
+
+# ---------------------------------------------------------------------------
+# Live protocols.io fetch (via Vip's client at the repo root)
+# ---------------------------------------------------------------------------
+
+def _bundle_to_normalized(
+    candidate: dict,
+    steps: list[dict],
+) -> Optional[NormalizedProtocol]:
+    """Convert one protocols_client.py candidate (with its steps) into a
+    NormalizedProtocol. Drops protocols with no usable id."""
+    pid = str(candidate.get("id") or "").strip()
+    if not pid:
+        return None
+
+    norm_steps: list[NormalizedStep] = []
+    for s in steps:
+        body = (s.get("description") or "").strip()
+        if not body:
+            continue
+        number = s.get("step_number")
+        norm_steps.append(NormalizedStep(
+            id=f"{pid}-{number or len(norm_steps)+1}",
+            section="",            # client doesn't expose section yet
+            number=str(number or ""),
+            text=body,
+            duration_seconds=None, # client doesn't expose duration yet
+        ))
+
+    # Language detection on the steps text — same heuristic as
+    # `normalize_bundle` so prompts can opt into "translate inline".
+    detect_corpus = " ".join(s.text for s in norm_steps[:3])
+    language = detect_language(detect_corpus)
+
+    return NormalizedProtocol(
+        id=pid,
+        title=str(candidate.get("title") or "").strip(),
+        description=candidate.get("description") or None,
+        doi=candidate.get("doi") or None,
+        url=candidate.get("url") or candidate.get("uri") or None,
+        authors=[],          # client doesn't expose authors yet
+        language=language,
+        materials_text="",   # client returns structured materials, not free text
+        steps=norm_steps,
+    )
+
+
+def fetch_live_candidates(
+    query: str,
+    *,
+    limit: int = 5,
+) -> dict[str, NormalizedProtocol]:
+    """Live fetch from protocols.io via the root-level `protocols_client`
+    module (Vip's file with our bug-fixes layered on). For each candidate
+    in the search response, fetches steps + materials and normalizes
+    into our NormalizedProtocol shape — the same shape the static-sample
+    loader produces, so the rest of the pipeline doesn't care.
+
+    Returns {} silently when the API is unreachable, the token is
+    missing, or the search returns nothing — caller falls back to
+    static samples in that case (see `protocol_pipeline.stage`)."""
+    try:
+        # Imported lazily so tests / offline dev don't pay the requests
+        # import cost when the live fetch is never used.
+        from protocols_client import (
+            search_protocols,
+            get_protocol_steps,
+        )
+    except Exception:
+        return {}
+
+    try:
+        candidates = search_protocols(query, limit=limit)
+    except Exception:
+        return {}
+
+    out: dict[str, NormalizedProtocol] = {}
+    for candidate in candidates:
+        pid = str(candidate.get("id") or "").strip()
+        if not pid:
+            continue
+        try:
+            steps = get_protocol_steps(pid)
+        except Exception:
+            steps = []
+        norm = _bundle_to_normalized(candidate, steps)
+        if norm is not None:
+            out[pid] = norm
+    return out

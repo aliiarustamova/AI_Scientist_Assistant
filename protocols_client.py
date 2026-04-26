@@ -1,11 +1,65 @@
 """
 protocols.io API client for read-only protocol grounding.
+
+Three bug-fixes layered on the original implementation, all tied to
+specific protocols.io API quirks we hit during sample-pulling:
+
+  1. order_field=relevance triggers a server-side SQL error
+     ("Unknown column 'an.author_name' in 'order clause'"). Switched
+     to "activity" + order_dir=desc — the combination that returns
+     200s in our smoke tests against the real API.
+
+  2. Steps endpoint returns {"payload": [...], "status_code": 0},
+     not {"steps": [...]}. Fixed the lookup key.
+
+  3. Step items have keys {id, guid, number, section, step, ...}
+     where `step` is a DraftJS JSON STRING, not flat title/description
+     fields. Parse the DraftJS body to extract a usable description;
+     derive a short title from the first line.
+
+Each fix is tagged BUGFIX(protocols.io) inline so they're easy to
+spot and remove if/when Vip's upstream version addresses them.
 """
+import json
 import os
+import re
 import requests
 
 PROTOCOLS_IO_TOKEN = os.environ.get("PROTOCOLS_IO_TOKEN")
 BASE_URL = "https://www.protocols.io/api"
+
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _parse_draftjs(raw):
+    """BUGFIX(protocols.io) #3 helper: peel a DraftJS JSON-string body
+    down to plaintext. Returns "" for malformed input — the pipeline
+    keeps going on bad steps rather than crashing."""
+    if not raw:
+        return ""
+    try:
+        obj = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return _HTML_TAG_RE.sub("", str(raw)).strip()
+    blocks = obj.get("blocks") if isinstance(obj, dict) else None
+    if not isinstance(blocks, list):
+        return ""
+    parts = []
+    for b in blocks:
+        if not isinstance(b, dict):
+            continue
+        text = (b.get("text") or "").strip()
+        if text:
+            parts.append(text)
+    return "\n".join(parts)
+
+
+def _short_title(body, max_len=70):
+    """Derive a step title from the first ~70 chars of the body. The API
+    doesn't have separate step titles; this matches the bundle shape
+    Vip's example_protocol_bundle.json shows."""
+    line = (body or "").split("\n", 1)[0].strip()
+    return (line[:max_len] + "…") if len(line) > max_len else line
 
 
 class ProtocolsIoError(Exception):
@@ -43,7 +97,13 @@ def search_protocols(query: str, limit: int = 5) -> list:
             params={
                 "filter": "public",
                 "key": query,
-                "order_field": "relevance",
+                # BUGFIX(protocols.io) #1: order_field=relevance returns
+                # a 400 SQL error from protocols.io's backend
+                # ("Unknown column 'an.author_name' in 'order clause'").
+                # Activity + desc returns 200s and gives reasonable
+                # ordering for our use case (recently-edited protocols
+                # tend to be better-maintained).
+                "order_field": "activity",
                 "order_dir": "desc",
                 "page_size": limit
             },
@@ -97,17 +157,34 @@ def get_protocol_steps(protocol_id: str) -> list:
         )
         response.raise_for_status()
         data = response.json()
-        
+
         steps = []
-        for item in data.get("steps", []):
+        # BUGFIX(protocols.io) #2: response is {"payload": [...],
+        # "status_code": 0}, NOT {"steps": [...]}. Reading "steps"
+        # silently returned an empty list on every call.
+        for item in data.get("payload", []):
+            # BUGFIX(protocols.io) #3: step items have keys
+            # {id, guid, number, section, step, ...} — the `step` field
+            # is a DraftJS JSON STRING, not a flat description. Parse
+            # it to plaintext; derive a title from the first line.
+            body = _parse_draftjs(item.get("step"))
+            number = item.get("number") or item.get("ordinal") or 0
+            try:
+                number = int(number)
+            except (TypeError, ValueError):
+                number = 0
             step = {
-                "step_number": item.get("ordinal", 0),
-                "title": item.get("title", ""),
-                "description": item.get("description", ""),
-                "image_url": item.get("image", {}).get("url") if isinstance(item.get("image"), dict) else None
+                "step_number": number,
+                "title": _short_title(body),
+                "description": body,
+                "image_url": (
+                    item.get("image", {}).get("url")
+                    if isinstance(item.get("image"), dict)
+                    else None
+                ),
             }
             steps.append(step)
-        
+
         return steps
     
     except requests.RequestException:

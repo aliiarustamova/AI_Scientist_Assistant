@@ -44,7 +44,11 @@ from src.types import (
 from .architect import ProtocolOutline, plan_outline
 from .materials import roll_up_materials
 from .relevance import filter_relevant
-from .sources import NormalizedProtocol, load_all_samples
+from .sources import (
+    NormalizedProtocol,
+    fetch_live_candidates,
+    load_all_samples,
+)
 from .writer import write_procedures_parallel
 
 
@@ -119,6 +123,69 @@ def _seconds_to_iso_duration(total: float) -> str:
     return out
 
 
+_QUERY_SYSTEM = """You extract candidate search queries for protocols.io from a structured scientific hypothesis.
+
+protocols.io's full-text search ANDs every token, so multi-word queries with rare combinations collapse to zero hits. We try your queries in order until one returns results, so RANK FROM MOST-LIKELY-TO-MATCH-MANY-PROTOCOLS to MOST-SPECIFIC.
+
+Strategy:
+- First query: ONE common single-concept word — the broad technique or reagent class (e.g., "trehalose", "ELISA", "Lactobacillus", "FITC-dextran").
+- Second query: a different angle in case the first misses (e.g., the assay name, organism class, or alternative reagent).
+- Third query (optional): one more concept word.
+
+Each query is 1-3 words MAX. Single words preferred. Avoid acronyms specific to one paper (e.g., not "LGG", use "Lactobacillus").
+
+Examples:
+- HeLa cryopreservation with trehalose vs DMSO →
+    trehalose
+    cryopreservation
+    cell freezing
+- CRP detection by paper biosensor →
+    C-reactive protein
+    ELISA
+    biosensor
+- Gut barrier in mice with Lactobacillus rhamnosus GG, FITC-dextran assay →
+    Lactobacillus
+    FITC-dextran
+    intestinal permeability
+
+Output ONLY the queries, ONE PER LINE, no numbering, no explanation, no quotes."""
+
+
+def _query_for_hypothesis(hypothesis: Hypothesis) -> list[str]:
+    """LLM-driven query extraction for protocols.io. Returns a list of 1-3
+    candidate queries, ranked from most-likely-to-match (broad concept)
+    to most-specific. Caller tries them in order.
+
+    Falls back to the structured.subject field's first word if the LLM
+    call fails — better than nothing."""
+    s = hypothesis.structured
+    user = (
+        f"Subject: {s.subject}\n"
+        f"Intervention: {s.independent}\n"
+        f"Measurement: {s.dependent}\n"
+        f"Conditions: {s.conditions}\n"
+        f"Expected: {s.expected}"
+    )
+    try:
+        from src.clients import llm
+        raw = llm.complete(_QUERY_SYSTEM, user).strip()
+        # Parse one-per-line, drop blanks, strip wrapping quotes / bullets.
+        lines: list[str] = []
+        for line in raw.splitlines():
+            t = line.strip().strip('"').strip("'").lstrip("•-*0123456789.) ").strip()
+            if t and 1 <= len(t) <= 60:
+                lines.append(t)
+        if lines:
+            return lines[:3]
+    except Exception:
+        pass
+    # Fallback: subject's first word (single concept).
+    subject = (s.subject or "").strip()
+    if subject:
+        return [subject.split()[0]]
+    return ["protocol"]
+
+
 def _sum_iso8601_durations(durations: list[Optional[str]]) -> Optional[str]:
     """Sum a list of ISO 8601 duration strings. Returns None if ANY input
     is missing or malformed — a partial sum would mislead a researcher
@@ -169,9 +236,37 @@ def run_protocol_only(
     """Run Stage 2 only: relevance + architect + writers. Skips materials
     roll-up so the FE can render the protocol as soon as it's ready and
     fetch materials in a separate request. Returns the protocol output
-    and the intermediate outline (kept for debugging / sample dumps)."""
+    and the intermediate outline (kept for debugging / sample dumps).
+
+    Source resolution (when `sources` is not explicitly provided):
+      1. Try a live protocols.io fetch using the hypothesis subject as
+         the search query (single-concept queries score better against
+         protocols.io's AND'd-token search than verbose hypotheses).
+      2. If that returns nothing — token missing, network down, no
+         matches, etc. — fall back to the static samples committed to
+         the repo. Tests + offline dev keep working.
+      3. If both empty, the architect / writer agents synthesize from
+         common knowledge alone (still produces a usable protocol;
+         the confidence banner reflects the lack of grounding).
+    """
     if sources is None:
-        sources = list(load_all_samples().values())
+        # Try ranked candidate queries until one returns hits. The query
+        # extractor outputs broad-to-specific so we don't lock onto a
+        # zero-result over-narrow query (e.g. "Lactobacillus rhamnosus GG"
+        # -> 0 hits) when a broader fallback ("Lactobacillus" -> 8 hits)
+        # is one retry away.
+        sources = []
+        queries = _query_for_hypothesis(hypothesis)
+        for query in queries:
+            live = fetch_live_candidates(query, limit=5)
+            if live:
+                sources = list(live.values())
+                break
+        if not sources:
+            # All candidate queries returned 0 — fall back to static
+            # samples. Tests + offline dev keep working; the confidence
+            # banner will reflect the lack of grounding.
+            sources = list(load_all_samples().values())
 
     # 1. Relevance filter
     scored = filter_relevant(hypothesis, sources, keep_threshold=relevance_threshold)
