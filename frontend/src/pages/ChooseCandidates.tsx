@@ -24,7 +24,7 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import {
   postProtocolCandidates,
   type ProtocolCandidate,
@@ -154,9 +154,12 @@ const ChooseCandidates = () => {
         selected_protocol_ids: withSelection
           ? Array.from(selectedIds)
           : undefined,
-        researcher_notes: withSelection && notes.trim()
-          ? notes.trim()
-          : undefined,
+        // Notes go through on BOTH paths: even when the researcher
+        // skips the candidate selection, they may want to leave
+        // general guidance ("focus on post-thaw viability, ignore
+        // the freezing rate"). The BE prompt accepts notes
+        // independently of selected_protocol_ids.
+        researcher_notes: notes.trim() || undefined,
       },
     });
   };
@@ -255,9 +258,9 @@ const ChooseCandidates = () => {
             </p>
             <p className="mt-2 text-[14px] text-ink">
               No hypothesis in the page state — start from{" "}
-              <a href="/lab" className="border-b border-ink text-ink hover:border-primary hover:text-primary">
+              <Link to="/lab" className="border-b border-ink text-ink hover:border-primary hover:text-primary">
                 /lab
-              </a>{" "}
+              </Link>{" "}
               to fetch real candidates, or skip straight to the plan to see
               the rest of the flow on mock data.
             </p>
@@ -437,20 +440,27 @@ const ChooseCandidates = () => {
         {!loading && (sortedCandidates.length > 0 || useMockData) && (
           <section className="mb-8 rounded-md border border-rule bg-paper-raised px-7 py-6">
             <div className="flex items-baseline justify-between">
-              <p className="font-mono-notebook text-[12px] uppercase tracking-[0.22em] text-sage">
+              {/* htmlFor pairs the heading with the textarea so screen
+                  readers announce them together; the cursor: pointer
+                  on hover gives sighted users the same affordance. */}
+              <label
+                htmlFor="researcher-notes"
+                className="cursor-pointer font-mono-notebook text-[12px] uppercase tracking-[0.22em] text-sage"
+              >
                 Researcher notes (optional)
-              </p>
+              </label>
               <span className="font-mono-notebook text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
                 threaded into the architect &amp; writer prompts
               </span>
             </div>
             <p className="mt-2 text-[13px] leading-[1.55] text-ink-soft">
               Anything the assistant should know — e.g. constraints
-              (\"we have a Sorvall RC-6, not Beckman\"), preferences
-              (\"use trehalose, not DMSO\"), or focus (\"don't bother with
-              the freezing rate; we care about post-thaw viability\").
+              (&ldquo;we have a Sorvall RC-6, not Beckman&rdquo;), preferences
+              (&ldquo;use trehalose, not DMSO&rdquo;), or focus (&ldquo;don&rsquo;t
+              bother with the freezing rate; we care about post-thaw viability&rdquo;).
             </p>
             <textarea
+              id="researcher-notes"
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
               placeholder="Optional: tell the assistant what matters and what to skip…"
