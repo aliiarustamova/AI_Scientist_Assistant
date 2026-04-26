@@ -7,10 +7,8 @@ The hypothesis is:
 {hypothesis}
 
 {feedback_context}
-The hypothesis is:
-{hypothesis}
 
-{feedback_context}
+{protocol_context}
 
 Be concise. Strict limits:
 - Maximum 5 protocol phases, 3 steps each
@@ -175,6 +173,14 @@ The JSON must follow this exact structure:
     }},
     "expected_outcome_summary": "What a successful experiment looks like",
     "go_no_go_threshold": "The single most important criterion for proceeding"
+  }},
+
+  "protocol_grounding": {{
+    "status": "none or success or failed",
+    "selected_protocol_title": "Protocol title if grounded",
+    "selected_protocol_url": "URL if grounded",
+    "source": "protocols.io or null",
+    "candidate_count": 0
   }}
 }}
 """
@@ -183,4 +189,19 @@ FEEDBACK_CONTEXT_TEMPLATE = """
 IMPORTANT - Prior scientist feedback for similar experiments:
 {feedback}
 Incorporate these corrections into your plan.
+"""
+
+PROTOCOL_CONTEXT_TEMPLATE = """
+Relevant protocols.io context:
+{protocol_context}
+
+Protocol grounding rules:
+- Use protocols.io steps and materials when relevant.
+- Do not copy protocol text verbatim.
+- Adapt protocol structure to the user's hypothesis.
+- If protocol evidence is weak, state that in assumptions/gaps.
+- Do not invent catalog numbers, vendors, SKUs, or prices if they are missing.
+- If materials come from protocols.io, preserve source/citation information.
+- If a material or price is inferred, mark it as estimated.
+- Human review is still required before any lab execution.
 """

@@ -41,3 +41,18 @@ React (via Lovable) → Vercel · Supabase (Postgres + pgvector + edge functions
 ## Status
 
 Spec phase. Implementation pending.
+
+## Environment variables
+
+- `ANTHROPIC_API_KEY` - Required for Claude API access
+- `PROTOCOLS_IO_TOKEN` - Optional, enables protocols.io grounding for experiment plans
+- `USE_MOCK_PROTOCOLS` - Optional, set to `true` for local fallback testing without live API
+
+## protocols.io Integration
+
+protocols.io integration is **read-only** for MVP. It searches public protocols, retrieves steps/materials, and uses them as grounding context for plan generation. It does not publish or export protocols.
+
+When enabled:
+- `/generate` endpoint returns protocol candidates and selected protocol metadata
+- `/protocols/search` endpoint allows searching for protocols
+- Protocol failures do not break plan generation - the app falls back gracefully
