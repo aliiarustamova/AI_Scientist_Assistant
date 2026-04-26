@@ -1149,7 +1149,7 @@ const LiteratureCheck = () => {
                   </p>
                 </div>
                 <Button
-                  onClick={() => navigate("/plan", {
+                  onClick={() => navigate("/candidates", {
                     state: {
                       plan_id: litResult?.plan_id,
                       structured: inputHypothesis,
@@ -1161,7 +1161,7 @@ const LiteratureCheck = () => {
                     Step 03 →
                   </span>
                   <span className="font-serif-display text-[19px] italic">
-                    Generate experiment plan
+                    Choose source protocols
                   </span>
                   <ArrowRight
                     className="h-5 w-5 transition-transform group-hover:translate-x-0.5"

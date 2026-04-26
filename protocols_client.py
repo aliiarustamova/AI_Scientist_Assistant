@@ -41,17 +41,23 @@ _HTML_TAG_RE = re.compile(r"<[^>]+>")
 
 def _parse_draftjs(raw):
     """BUGFIX(protocols.io) #3 helper: peel a DraftJS JSON-string body
-    down to plaintext. Returns "" for malformed input — the pipeline
-    keeps going on bad steps rather than crashing."""
+    down to plaintext. Falls through to the raw text when the input
+    isn't DraftJS — protocols.io has been seen returning plain prose
+    for some `description` fields and DraftJS JSON for others, and
+    the candidate-selection card needs to render either gracefully."""
     if not raw:
         return ""
     try:
         obj = json.loads(raw)
     except (json.JSONDecodeError, TypeError):
+        # Plain text (or HTML) — strip tags and return.
         return _HTML_TAG_RE.sub("", str(raw)).strip()
     blocks = obj.get("blocks") if isinstance(obj, dict) else None
     if not isinstance(blocks, list):
-        return ""
+        # Parsed as JSON but not DraftJS-shaped. Best to surface the
+        # original raw text rather than blank out — at least the user
+        # can read it.
+        return _HTML_TAG_RE.sub("", str(raw)).strip()
     parts = []
     for b in blocks:
         if not isinstance(b, dict):
@@ -59,7 +65,10 @@ def _parse_draftjs(raw):
         text = (b.get("text") or "").strip()
         if text:
             parts.append(text)
-    return "\n".join(parts)
+    joined = "\n".join(parts)
+    # If DraftJS parsed but had no usable text blocks, again fall
+    # back to the raw input so the card renders something.
+    return joined or _HTML_TAG_RE.sub("", str(raw)).strip()
 
 
 def _short_title(body, max_len=70):
@@ -123,10 +132,16 @@ def search_protocols(query: str, limit: int = 5) -> list:
         
         candidates = []
         for item in data.get("items", []):
+            # BUGFIX(protocols.io) #4: `description` is sometimes a
+            # DraftJS JSON-string, same as `step` (see #3 above), and
+            # sometimes plain prose. Parse-or-fall-through; otherwise
+            # the FE candidate card renders raw `{"blocks":[...]}` JSON.
+            raw_desc = item.get("description") or ""
+            description = _parse_draftjs(raw_desc)[:500]
             protocol = {
                 "id": str(item.get("id", "")),
                 "title": item.get("title", ""),
-                "description": item.get("description", "")[:500] if item.get("description") else "",
+                "description": description,
                 "url": item.get("uri", ""),
                 "doi": item.get("doi", ""),
                 "uri": item.get("uri", ""),
@@ -180,11 +195,10 @@ def get_protocol_metadata(protocol_id: str) -> dict:
         item = data.get("protocol") or data
         if not isinstance(item, dict):
             return {}
-        # Truncate description to match search_protocols's 500-char cap
-        # so downstream rendering is uniform.
-        desc = item.get("description") or ""
-        if isinstance(desc, str) and len(desc) > 500:
-            desc = desc[:500]
+        # Same DraftJS-or-plain-text dance as search_protocols. Strip
+        # to plaintext via _parse_draftjs, then cap at 500 chars so
+        # downstream rendering is uniform.
+        desc = _parse_draftjs(item.get("description") or "")[:500]
         return {
             "id": str(item.get("id", protocol_id)),
             "title": item.get("title", ""),
