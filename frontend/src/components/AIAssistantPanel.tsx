@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Send, Sparkles, X } from "lucide-react";
+import { Send, Sparkles } from "lucide-react";
 import {
   Sheet,
   SheetContent,
