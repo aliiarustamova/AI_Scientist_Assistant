@@ -21,12 +21,20 @@ Each fix is tagged BUGFIX(protocols.io) inline so they're easy to
 spot and remove if/when Vip's upstream version addresses them.
 """
 import json
+import logging
 import os
 import re
 import requests
 
 PROTOCOLS_IO_TOKEN = os.environ.get("PROTOCOLS_IO_TOKEN")
 BASE_URL = "https://www.protocols.io/api"
+
+# Module-level logger so callers can configure verbosity (e.g. silencing
+# the network warnings during local-sample tests). RequestException paths
+# below log + return [] rather than swallowing silently — that way an
+# invalid token or a downed protocols.io is visible in the server log
+# while the caller still gets a graceful empty-result fallback.
+_LOG = logging.getLogger(__name__)
 
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 
@@ -132,8 +140,66 @@ def search_protocols(query: str, limit: int = 5) -> list:
         
         return candidates
     
-    except requests.RequestException:
+    except requests.RequestException as exc:
+        # Log so operators see "API down" / "bad token" in server logs
+        # rather than silently degrading. Return [] so callers still
+        # get a graceful no-results fallback (the offline static-samples
+        # path picks up).
+        _LOG.warning("protocols.io request failed: %s", exc)
         return []
+
+
+def get_protocol_metadata(protocol_id: str) -> dict:
+    """Fetch top-level metadata for a single protocol by ID.
+
+    Used by `fetch_one_protocol` in protocol_pipeline/sources.py to
+    populate title / description / doi / url when the FE has handed
+    us a pre-selected protocol ID rather than a full search result.
+    Without this, those candidates rendered with empty titles in the
+    final cited-protocols panel.
+
+    Returns the same dict shape as one item from `search_protocols`
+    (id, title, description, url, doi, source) so the caller can pass
+    it straight into `_bundle_to_normalized`. Returns {} when the
+    token is missing, the API errors, or the protocol id isn't found.
+    """
+    if not PROTOCOLS_IO_TOKEN:
+        return {}
+
+    try:
+        response = requests.get(
+            f"{BASE_URL}/v3/protocols/{protocol_id}",
+            headers=get_headers(),
+            timeout=10,
+        )
+        response.raise_for_status()
+        data = response.json()
+        # protocols.io wraps single-protocol responses in {"protocol":
+        # {...}} or sometimes returns the protocol dict at the top level
+        # depending on the endpoint version. Handle both shapes.
+        item = data.get("protocol") or data
+        if not isinstance(item, dict):
+            return {}
+        # Truncate description to match search_protocols's 500-char cap
+        # so downstream rendering is uniform.
+        desc = item.get("description") or ""
+        if isinstance(desc, str) and len(desc) > 500:
+            desc = desc[:500]
+        return {
+            "id": str(item.get("id", protocol_id)),
+            "title": item.get("title", ""),
+            "description": desc,
+            "url": item.get("uri", "") or item.get("url", ""),
+            "doi": item.get("doi", ""),
+            "uri": item.get("uri", ""),
+            "source": "protocols.io",
+            "materials_available": item.get("has_materials", False),
+            "steps_available": item.get("has_steps", False),
+        }
+    except requests.RequestException as exc:
+        _LOG.warning("protocols.io get_protocol_metadata(%s) failed: %s",
+                     protocol_id, exc)
+        return {}
 
 
 def get_protocol_steps(protocol_id: str) -> list:
@@ -168,11 +234,14 @@ def get_protocol_steps(protocol_id: str) -> list:
             # is a DraftJS JSON STRING, not a flat description. Parse
             # it to plaintext; derive a title from the first line.
             body = _parse_draftjs(item.get("step"))
-            number = item.get("number") or item.get("ordinal") or 0
-            try:
-                number = int(number)
-            except (TypeError, ValueError):
-                number = 0
+            # Preserve the API's original step number — protocols.io
+            # uses "1.1" / "2a" / "3" interchangeably. Forcing int loses
+            # the sub-step labels that researchers use to reference
+            # branches. Default to "" only when the API returns nothing.
+            number_raw = item.get("number")
+            if number_raw is None:
+                number_raw = item.get("ordinal")
+            number = "" if number_raw is None else str(number_raw).strip()
             step = {
                 "step_number": number,
                 "title": _short_title(body),
@@ -187,7 +256,12 @@ def get_protocol_steps(protocol_id: str) -> list:
 
         return steps
     
-    except requests.RequestException:
+    except requests.RequestException as exc:
+        # Log so operators see "API down" / "bad token" in server logs
+        # rather than silently degrading. Return [] so callers still
+        # get a graceful no-results fallback (the offline static-samples
+        # path picks up).
+        _LOG.warning("protocols.io request failed: %s", exc)
         return []
 
 
@@ -227,7 +301,12 @@ def get_protocol_materials(protocol_id: str) -> list:
         
         return materials
     
-    except requests.RequestException:
+    except requests.RequestException as exc:
+        # Log so operators see "API down" / "bad token" in server logs
+        # rather than silently degrading. Return [] so callers still
+        # get a graceful no-results fallback (the offline static-samples
+        # path picks up).
+        _LOG.warning("protocols.io request failed: %s", exc)
         return []
 
 

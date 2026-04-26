@@ -313,12 +313,15 @@ def run_protocol_only(
     if sources is None and selected_protocol_ids:
         # User pre-selected candidates from /protocol-candidates. Re-
         # hydrate them by ID; skip relevance filtering since the user
-        # already filtered.
-        sources = []
-        for pid in selected_protocol_ids:
-            norm = fetch_one_protocol(pid)
-            if norm is not None:
-                sources.append(norm)
+        # already filtered. Each fetch is two independent network calls
+        # (metadata + steps) — parallelize across IDs so a 5-candidate
+        # selection doesn't take 5x the latency of one.
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(
+            max_workers=min(len(selected_protocol_ids), 10),
+        ) as pool:
+            results = list(pool.map(fetch_one_protocol, selected_protocol_ids))
+        sources = [r for r in results if r is not None]
 
     if sources is None:
         # Try ranked candidate queries until one returns hits. The query

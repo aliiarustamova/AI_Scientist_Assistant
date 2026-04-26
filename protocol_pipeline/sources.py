@@ -295,58 +295,50 @@ def fetch_one_protocol(protocol_id: str) -> Optional[NormalizedProtocol]:
     """Fetch a single protocol by ID via Vip's client and return its
     normalized form. Used by /protocol when the user has pre-selected
     candidate IDs from /protocol-candidates and we need to re-hydrate
-    them for the pipeline. Returns None on any failure (network, bad
-    ID, empty steps)."""
+    them for the pipeline. Returns None on missing module / empty
+    steps / bad ID; surfaces network errors via the client's logger
+    rather than silently swallowing.
+
+    Reuses `_bundle_to_normalized` so the metadata population path is
+    identical to the search → normalize pipeline. Without the metadata
+    lookup, cited protocols rendered with empty titles in the final
+    Stage-2 output (the user couldn't tell which paper grounded which
+    procedure).
+    """
+    # Catch only the import-failure cases. Letting NameError /
+    # AttributeError out of `protocols_client` propagate means real
+    # bugs surface instead of being silently treated as "no result".
     try:
         from protocols_client import (
-            search_protocols,  # only used to grab metadata; cheap
+            get_protocol_metadata,
             get_protocol_steps,
         )
-    except Exception:
+    except (ImportError, ModuleNotFoundError):
         return None
 
     pid = str(protocol_id).strip()
     if not pid:
         return None
 
-    # We don't have a /api/v3/protocols/{id} read-by-id wrapper in Vip's
-    # client, so we fetch steps directly (which works) and derive title /
-    # description from the steps' protocol metadata if available, or
-    # leave the candidate's stored copy. The caller usually already has
-    # title/description from a prior /protocol-candidates response —
-    # this function is intentionally minimal.
-    try:
-        steps = get_protocol_steps(pid)
-    except Exception:
-        return None
+    # Fetch metadata (title / description / doi / url) and steps in
+    # parallel. Both are independent network calls; running them
+    # serially doubles the latency for no reason.
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        meta_future = pool.submit(get_protocol_metadata, pid)
+        steps_future = pool.submit(get_protocol_steps, pid)
+        candidate = meta_future.result() or {}
+        steps = steps_future.result() or []
 
     if not steps:
         return None
 
-    norm_steps: list[NormalizedStep] = []
-    for s in steps:
-        body = (s.get("description") or "").strip()
-        if not body:
-            continue
-        number = s.get("step_number")
-        norm_steps.append(NormalizedStep(
-            id=f"{pid}-{number or len(norm_steps)+1}",
-            section="",
-            number=str(number or ""),
-            text=body,
-        ))
+    # Make sure the candidate dict has the id even when the metadata
+    # lookup returned empty — `_bundle_to_normalized` requires it.
+    if not candidate.get("id"):
+        candidate["id"] = pid
 
-    return NormalizedProtocol(
-        id=pid,
-        title="",                # caller fills from candidate metadata
-        description=None,
-        doi=None,
-        url=None,
-        authors=[],
-        language=detect_language(" ".join(s.text for s in norm_steps[:3])),
-        materials_text="",
-        steps=norm_steps,
-    )
+    return _bundle_to_normalized(candidate, steps)
 
 
 def fetch_live_candidates(
@@ -370,24 +362,42 @@ def fetch_live_candidates(
             search_protocols,
             get_protocol_steps,
         )
-    except Exception:
+    except (ImportError, ModuleNotFoundError):
+        # Narrow to the only error we actually want to swallow here.
+        # NameError / AttributeError inside the client mean a real bug;
+        # let those propagate so the server-error log is informative.
         return {}
 
-    try:
-        candidates = search_protocols(query, limit=limit)
-    except Exception:
-        return {}
+    # `search_protocols` already catches RequestException internally and
+    # returns []. We don't wrap it again — letting NameError /
+    # AttributeError surface here means real bugs in the client are
+    # visible in the server log instead of being silently treated as
+    # "no candidates found".
+    candidates = search_protocols(query, limit=limit)
+
+    # Fetch each candidate's steps in parallel — they're independent
+    # network calls and serializing them N times would dominate the
+    # wall-clock cost of /protocol-candidates.
+    from concurrent.futures import ThreadPoolExecutor
+
+    valid = [c for c in candidates if str(c.get("id") or "").strip()]
 
     out: dict[str, NormalizedProtocol] = {}
-    for candidate in candidates:
-        pid = str(candidate.get("id") or "").strip()
-        if not pid:
-            continue
-        try:
-            steps = get_protocol_steps(pid)
-        except Exception:
-            steps = []
-        norm = _bundle_to_normalized(candidate, steps)
+    if not valid:
+        return out
+
+    # `get_protocol_steps` already catches RequestException internally
+    # and returns []. We let NameError / AttributeError surface (real
+    # bugs in the client) instead of silently swallowing.
+    with ThreadPoolExecutor(max_workers=min(len(valid), 8)) as pool:
+        steps_per_candidate = list(pool.map(
+            lambda c: get_protocol_steps(str(c["id"]).strip()),
+            valid,
+        ))
+
+    for candidate, steps in zip(valid, steps_per_candidate):
+        pid = str(candidate["id"]).strip()
+        norm = _bundle_to_normalized(candidate, steps or [])
         if norm is not None:
             out[pid] = norm
     return out
