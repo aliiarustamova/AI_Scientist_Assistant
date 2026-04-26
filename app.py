@@ -3,6 +3,7 @@
 Endpoints:
   GET  /health      Liveness ping
   POST /lit-review  Stage 1 (novelty check); persists a plan, returns plan_id
+  POST /protocol-sources  protocols.io public search (research_question) + publications fallback
   POST /protocol    Stage 2 (protocol generation); accepts {plan_id} to chain
                     off a prior /lit-review, or {structured} for a fresh start
   POST /materials   Stage 3 (materials roll-up); accepts {plan_id} for chaining
@@ -22,11 +23,14 @@ without a backend change.
 
 from __future__ import annotations
 
+import json
 import os
+import re
 import sys
 import traceback
 import uuid
 
+import requests
 from dotenv import load_dotenv
 
 # Load .env BEFORE importing modules that read env at import time.
@@ -63,6 +67,23 @@ from protocol_pipeline.frontend_view import (  # noqa: E402
 app = Flask(__name__)
 CORS(app)  # allow cross-origin from the FE dev server / Vercel
 
+PARSE_HYPOTHESIS_SYSTEM = """You convert raw scientific hypothesis prose into a structured object.
+
+Return ONLY valid JSON with exactly these keys:
+- research_question
+- subject
+- independent
+- dependent
+- conditions
+- expected
+
+Rules:
+- Keep values concise and specific.
+- Never return null; use empty string if a field is unknown.
+- Preserve important scientific notation (units, strain names, temperature, etc.).
+- `research_question` should be one sentence ending with '?'.
+"""
+
 
 @app.get("/health")
 def health():
@@ -73,6 +94,42 @@ def health():
         "stage": "lit_review",
         "model": llm.model_id(),
     })
+
+
+@app.post("/parse-hypothesis")
+def parse_hypothesis():
+    """Parse free-text hypothesis into StructuredHypothesis fields.
+
+    Request:
+      { "text": "raw hypothesis prose..." }
+
+    Response:
+      { "structured": { research_question, subject, independent, dependent, conditions, expected } }
+    """
+    body = request.get_json(silent=True) or {}
+    text = (body.get("text") or "").strip()
+    if not text:
+        return jsonify({
+            "error": "request_body_required",
+            "detail": "Body must be JSON with a non-empty 'text' field.",
+        }), 400
+
+    try:
+        parsed = llm.complete_json(
+            PARSE_HYPOTHESIS_SYSTEM,
+            f"Hypothesis prose:\n{text}",
+            agent_name="parse_hypothesis",
+        )
+        structured = StructuredHypothesis(**parsed)
+        return jsonify({"structured": structured.model_dump(mode="json")})
+    except ValidationError as exc:
+        return jsonify({"error": "validation_error", "detail": exc.errors()}), 422
+    except Exception:
+        traceback.print_exc()
+        return jsonify({
+            "error": "pipeline_error",
+            "detail": "Hypothesis parsing failed. Check server logs for the underlying cause.",
+        }), 500
 
 
 @app.post("/lit-review")
@@ -270,6 +327,267 @@ def protocol():
         "frontend_view": adapt_protocol(protocol_out).model_dump(mode="json"),
         "raw": protocol_out.model_dump(mode="json"),
     })
+
+
+# ---------------------------------------------------------------------------
+# POST /protocol-sources (protocols.io)
+# ---------------------------------------------------------------------------
+
+PROTOCOLS_IO_BASE = "https://www.protocols.io/api/v3"
+
+# When protocols.io returns Draft.js as a string, ``json.loads`` can fail (size,
+# escapes, minor malformation). Fall back to pulling ``"text"`` fields with regex.
+_DRAFT_TEXT_FIELD_RE = re.compile(r'"text"\s*:\s*"((?:[^"\\]|\\.)*)"')
+
+
+def _draft_plain_from_json_string(s: str) -> str:
+    """Best-effort plain text from a Draft.js JSON string without full parsing."""
+    parts = _DRAFT_TEXT_FIELD_RE.findall(s)
+    if not parts:
+        return ""
+    out: list[str] = []
+    for p in parts:
+        out.append(
+            p.replace("\\n", " ")
+            .replace("\\r", " ")
+            .replace('\\"', '"')
+            .replace("\\\\", "\\")
+        )
+    return " ".join(out)
+
+
+def _first_draft_value(item: dict) -> object:
+    """protocols.io may put Draft content under several keys; use the first non-empty."""
+    for k in ("description", "abstract", "guidelines", "before_start", "materials_text", "warning"):
+        v = item.get(k)
+        if v is None:
+            continue
+        if isinstance(v, str) and v.strip():
+            return v
+        if isinstance(v, dict) and v:
+            return v
+    return ""
+
+
+def _flatten_draft_to_plain(s: str) -> str:
+    """Parse Draft JSON (or string that still looks like Draft after a failed pass)."""
+    t = s.strip()
+    if not t or ("blocks" not in t and "Blocks" not in t):
+        return t
+    if t.lstrip().startswith("{"):
+        try:
+            parsed = json.loads(t)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            plain = _draft_plain_from_json_string(t)
+            return plain if plain.strip() else t
+        return extract_text(parsed)
+    if t.lstrip().startswith("["):
+        try:
+            arr = json.loads(t)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            return _draft_plain_from_json_string(t) or t
+        if isinstance(arr, list) and arr:
+            return extract_text(arr[0])
+    return _draft_plain_from_json_string(t) or t
+
+
+def _coerce_plain_summary(text: str, raw: object) -> str:
+    """Ensure card summary is human text, not a Draft.js JSON string."""
+    t = (text or "").strip().replace("\ufeff", "")
+    tl = t.lstrip()
+    is_draft = (tl.startswith("{") and '"blocks"' in t) or (tl.startswith("[") and '"blocks"' in t)
+    if t and not is_draft:
+        return t
+    if isinstance(raw, str) and '"blocks"' in raw:
+        p = _draft_plain_from_json_string(raw)
+        if p.strip():
+            return p
+    if t:
+        p = _flatten_draft_to_plain(t)
+        if p.strip():
+            return p
+        p2 = _draft_plain_from_json_string(t)
+        if p2.strip():
+            return p2
+    if isinstance(raw, (dict, list)):
+        p = extract_text(raw)
+        if p.strip():
+            return p
+    return t
+
+
+def extract_text(desc: object) -> str:
+    """Strip Draft.js JSON from protocols.io ``description`` into plain text."""
+    if desc is None:
+        return ""
+    if isinstance(desc, dict) and "blocks" in desc:
+        blocks = desc.get("blocks")
+        if isinstance(blocks, list):
+            return " ".join(
+                (b.get("text", "") if isinstance(b, dict) else "") for b in blocks
+            )
+        return ""
+    if isinstance(desc, str):
+        s = desc.strip()
+        if not s:
+            return ""
+        if "blocks" in s and s.lstrip().startswith("{"):
+            try:
+                return extract_text(json.loads(s))
+            except (json.JSONDecodeError, TypeError, ValueError):
+                plain = _draft_plain_from_json_string(s)
+                if plain.strip():
+                    return plain
+                p2 = _flatten_draft_to_plain(s)
+                if p2.strip() and not (
+                    p2.lstrip().startswith("{") and '"blocks"' in p2
+                ):
+                    return p2
+        return s
+    return str(desc) if desc else ""
+
+
+def normalize_protocols(data: dict, fetch_mode: str) -> dict:
+    """Map protocols.io `items` to FE card rows."""
+    protocols: list[dict] = []
+    for item in data.get("items", []):
+        if not isinstance(item, dict):
+            continue
+        if item.get("id") is None:
+            continue
+        raw = _first_draft_value(item)
+        text = _coerce_plain_summary(extract_text(raw), raw)
+        summary = text[:300] + ("..." if len(text) > 300 else "")
+        protocols.append(
+            {
+                "id": str(item.get("id")),
+                "title": item.get("title") or "Untitled protocol",
+                "source": "protocols.io",
+                "summary": summary,
+                "keySteps": ["Open full protocol for steps"],
+            },
+        )
+    return {
+        "sources": protocols,
+        "fetch_mode": fetch_mode,
+    }
+
+
+def fetch_protocols_from_protocols_io(
+    structured: StructuredHypothesis,
+    *,
+    search_key: str | None = None,
+) -> tuple[list[dict], str]:
+    """GET protocols.io public search, then latest publications. Debug-print each request."""
+    token = (os.environ.get("PROTOCOLS_IO_API_KEY") or os.environ.get("PROTOCOLS_IO_TOKEN") or "").strip()
+    if not token:
+        return [], "missing_credentials"
+
+    headers = {"Authorization": token}
+
+    rq = (search_key or structured.research_question or "").strip()
+    words = rq.split()
+    query_candidates = [
+        rq,
+        " ".join(words[:4]),
+        words[0] if words else "",
+        max(words, key=len) if words else "",
+    ]
+    seen_q: set[str] = set()
+    unique_candidates: list[str] = []
+    for c in query_candidates:
+        c = c.strip()
+        if len(c) < 1 or c in seen_q:
+            continue
+        seen_q.add(c)
+        unique_candidates.append(c)
+
+    search_url = f"{PROTOCOLS_IO_BASE}/protocols"
+    for q in unique_candidates:
+        params = {
+            "filter": "public",
+            "key": q,
+            "order_field": "activity",
+            "order_dir": "desc",
+            "page_size": "20",
+            "page_id": "1",
+        }
+        res = requests.get(search_url, headers=headers, params=params, timeout=45)
+        print("QUERY:", q)
+        print("STATUS:", res.status_code)
+        print("RAW RESPONSE:", res.text[:500])
+        try:
+            data = res.json()
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(data, dict):
+            continue
+        if data.get("items"):
+            out = normalize_protocols(data, fetch_mode="search")
+            return out["sources"], out["fetch_mode"]
+
+    pub_url = f"{PROTOCOLS_IO_BASE}/publications"
+    pub_params = {"latest": 10}
+    res = requests.get(pub_url, headers=headers, params=pub_params, timeout=45)
+    print("QUERY:", "publications_fallback", pub_params)
+    print("STATUS:", res.status_code)
+    print("RAW RESPONSE:", res.text[:500])
+    try:
+        data = res.json()
+    except json.JSONDecodeError:
+        return [], "empty"
+    if not isinstance(data, dict):
+        return [], "empty"
+    if data.get("items"):
+        out = normalize_protocols(data, fetch_mode="publications_fallback")
+        return out["sources"], out["fetch_mode"]
+    return [], "empty"
+
+
+@app.post("/protocol-sources")
+def protocol_sources():
+    """Return normalized protocols.io publications for the Protocol Sources step.
+
+    Request:
+      { "structured": { research_question, subject, ... } }
+
+    Response:
+      { "sources": [ { id, title, source, summary, keySteps } ] }
+    """
+    body = request.get_json(silent=True) or {}
+    raw_structured = body.get("structured")
+    if not isinstance(raw_structured, dict):
+        raw_structured = {
+            "research_question": "",
+            "subject": "",
+            "independent": "",
+            "dependent": "",
+            "conditions": "",
+            "expected": "",
+        }
+    try:
+        structured = StructuredHypothesis(**raw_structured)
+    except ValidationError as exc:
+        return jsonify({"error": "validation_error", "detail": exc.errors()}), 422
+
+    search_key = (structured.research_question or "").strip()
+    fetch_mode = "empty"
+    try:
+        sources, fetch_mode = fetch_protocols_from_protocols_io(
+            structured,
+            search_key=search_key,
+        )
+    except Exception:  # defensive; fetch helper already swallows, but do not 500
+        traceback.print_exc()
+        sources = []
+        fetch_mode = "error"
+    return jsonify(
+        {
+            "sources": sources,
+            "search_query": search_key,
+            "fetch_mode": fetch_mode,
+        },
+    )
 
 
 # ---------------------------------------------------------------------------
