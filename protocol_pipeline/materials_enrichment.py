@@ -38,7 +38,13 @@ from __future__ import annotations
 
 import logging
 import re
-from concurrent.futures import ThreadPoolExecutor
+import time
+from concurrent.futures import (
+    FIRST_COMPLETED,
+    ThreadPoolExecutor,
+    TimeoutError as FuturesTimeoutError,
+    wait,
+)
 from typing import Any, Optional
 from urllib.parse import urlparse
 
@@ -407,15 +413,24 @@ def enrich_materials_view(
     view: FEMaterialsView,
     *,
     max_workers: int = 6,
+    overall_timeout: float = 45.0,
 ) -> FEMaterialsView:
     """Walk every item across every group, enrich in parallel, and
     return a new view with the enrichment fields populated. Never
     raises — best-effort across the whole list. Cached upstream
     (30-day TTL on supplier searches) so reruns of the same plan
-    are essentially free."""
-    # Flatten in iteration order. We pool.map over `flat`, so the
-    # output list is index-aligned with `flat` — reassembly is a
-    # single linear pass via an iterator (O(N), not O(G×N)).
+    are essentially free.
+
+    Bounded by `overall_timeout`: items that haven't completed by the
+    deadline are returned unenriched (FE renders "TBD"). The stuck
+    worker threads are abandoned via shutdown(wait=False, cancel_futures=
+    True) so the response returns on time even when Tavily / the LLM
+    hangs on a particular item. Without this bound, one slow item
+    serializes the whole enrichment behind it and the user sees a
+    timeout instead of a partial result.
+    """
+    # Flatten in iteration order. We submit each as a future indexed by
+    # position so reassembly is a single linear pass.
     flat: list[FEReagent] = [
         item for group in view.groups for item in group.items
     ]
@@ -423,8 +438,48 @@ def enrich_materials_view(
         return view
 
     n_workers = min(len(flat), max_workers)
-    with ThreadPoolExecutor(max_workers=n_workers) as pool:
-        enriched = list(pool.map(enrich_one_item, flat))
+    # Start with originals — anything we can't enrich in time stays as-is.
+    enriched: list[FEReagent] = list(flat)
+
+    pool = ThreadPoolExecutor(max_workers=n_workers)
+    try:
+        future_to_idx = {
+            pool.submit(enrich_one_item, item): idx
+            for idx, item in enumerate(flat)
+        }
+        deadline = time.monotonic() + overall_timeout
+        pending = set(future_to_idx.keys())
+
+        while pending:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                _LOG.warning(
+                    "Materials enrichment overall budget (%.1fs) exhausted; "
+                    "%d/%d items still in flight, falling back to TBD for the rest.",
+                    overall_timeout, len(pending), len(flat),
+                )
+                break
+            done, pending = wait(pending, timeout=remaining, return_when=FIRST_COMPLETED)
+            if not done:
+                # wait() returned with no progress before remaining elapsed —
+                # likely the timeout fired. Loop checks `remaining` next.
+                continue
+            for fut in done:
+                idx = future_to_idx[fut]
+                try:
+                    # Already done; tiny timeout just to be defensive.
+                    enriched[idx] = fut.result(timeout=0.1)
+                except Exception as exc:  # noqa: BLE001 — best-effort
+                    _LOG.warning(
+                        "Materials enrichment for item %d (%r) failed: %s",
+                        idx, flat[idx].name, exc,
+                    )
+                    # Leave enriched[idx] as the original — falls through to TBD.
+    finally:
+        # Don't block on hung Tavily / LLM calls. cancel_futures=True asks
+        # any not-yet-started futures to skip; in-flight ones continue in
+        # the background but we no longer wait for them.
+        pool.shutdown(wait=False, cancel_futures=True)
 
     # Reassemble: walk groups in the same order and pull len(group.items)
     # results off the front of the iterator each time.
