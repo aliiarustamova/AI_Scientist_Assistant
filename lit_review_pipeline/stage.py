@@ -23,7 +23,9 @@ Why Europe PMC:
 
 from __future__ import annotations
 
+import html
 import json
+import re
 import uuid
 from typing import Any
 
@@ -127,6 +129,35 @@ def _rewrite_query(h: Hypothesis) -> str:
 
 
 # ----------------------------------------------------------------------------
+# Post-processing helpers
+# ----------------------------------------------------------------------------
+
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+
+
+def _clean_text(s: str | None) -> str | None:
+    """Decode HTML entities and strip simple inline tags. Europe PMC sometimes
+    returns titles with <i>, <sub>, <sup>, <b> tags wrapped in entity-encoded
+    form (e.g. '&lt;i&gt;Lactobacillus rhamnosus&lt;/i&gt; GG ...'). For
+    hackathon UI we want clean text — losing italics is cheaper than
+    handling encoded markup in React."""
+    if not s:
+        return s
+    return _HTML_TAG_RE.sub("", html.unescape(s)).strip()
+
+
+def _truncate_to_n_sentences(s: str | None, n: int) -> str:
+    """Hard cap on sentence count. The summary prompt asks for 3-4 sentences
+    and Gemini Flash usually obeys, but it occasionally overruns. This is a
+    deterministic backstop so the FE doesn't see a 5-sentence wall of text."""
+    if not s:
+        return s or ""
+    parts = _SENTENCE_SPLIT_RE.split(s.strip())
+    return " ".join(parts[:n]).strip()
+
+
+# ----------------------------------------------------------------------------
 # Europe PMC paper helpers
 # ----------------------------------------------------------------------------
 
@@ -216,7 +247,7 @@ def _compose_citation(paper: dict, editorial: dict) -> Citation:
     return Citation(
         source="europe_pmc",
         confidence="high",  # Europe PMC metadata is authoritative
-        title=paper.get("title"),
+        title=_clean_text(paper.get("title")),
         authors=_paper_authors(paper),
         year=_paper_year(paper) or extract_year(page_url, paper.get("title"), abstract),
         venue=_paper_venue(paper) or extract_venue(page_url),
@@ -272,7 +303,9 @@ def _classify(
             continue
         refs.append(_compose_citation(papers[idx], r))
 
-    summary = (parsed.get("summary") or "").strip()
+    # Hard-cap summary to 4 sentences. Prompt asks for 3-4 but the LLM
+    # sometimes overshoots; truncating here is deterministic and silent.
+    summary = _truncate_to_n_sentences((parsed.get("summary") or "").strip(), n=4)
     return parsed["signal"], parsed["description"], refs, summary
 
 

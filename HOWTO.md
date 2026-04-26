@@ -66,6 +66,48 @@ cat plans/plan_*.json | jq .status
 
 Re-runs build a new plan each time. Old plan JSONs accumulate in `plans/` (gitignored).
 
+## API server (for the frontend)
+
+A Flask app exposes Stage 1 over HTTP so the FE can hit it.
+
+```bash
+# dev
+python app.py
+# server on http://127.0.0.1:5000
+```
+
+Endpoints:
+
+| Method | Path | Body | Response |
+|---|---|---|---|
+| `GET` | `/health` | — | `{"ok": true, ...}` |
+| `POST` | `/lit-review` | `{"structured": {...}, "domain": "..."}` (see below) | `LitReviewOutput` JSON |
+
+Sample request:
+
+```bash
+curl -X POST http://127.0.0.1:5000/lit-review \
+  -H "Content-Type: application/json" \
+  -d '{
+    "structured": {
+      "research_question": "Does trehalose improve HeLa post-thaw viability vs DMSO?",
+      "subject": "HeLa cells",
+      "independent": "Cryoprotectant identity",
+      "dependent": "Post-thaw viability",
+      "conditions": "Slow freeze, LN2, rapid thaw, trypan blue",
+      "expected": ">=15 percentage point increase"
+    },
+    "domain": "cell_biology"
+  }'
+```
+
+Errors:
+- `400 request_body_required` — body wasn't JSON
+- `422 validation_error` — `structured` fields missing or malformed; `detail[]` has Pydantic field errors
+- `500 pipeline_error` — LLM or Europe PMC failure
+
+CORS is enabled for any origin so the FE dev server / Vercel preview can hit it directly.
+
 ## Repo layout
 
 ```

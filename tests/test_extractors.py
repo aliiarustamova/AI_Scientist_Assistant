@@ -5,6 +5,9 @@ after the LLM classifier returns. The point is to catch a class of LLM
 hallucinations (fake authors, wrong years, made-up venues) without re-doing
 the LLM's job.
 
+Also covers the post-processing helpers in lit_review_pipeline/stage.py
+(HTML-strip on titles, sentence-cap on summaries).
+
 Run:
   pytest tests/test_extractors.py -v
 """
@@ -19,6 +22,7 @@ from lit_review_pipeline.extractors import (
     extract_year,
     validate_authors,
 )
+from lit_review_pipeline.stage import _clean_text, _truncate_to_n_sentences
 
 
 # =============================================================================
@@ -89,6 +93,43 @@ def test_venue_unknown_host_returns_none():
 # =============================================================================
 # validate_authors — the headline hallucination guard (1 test)
 # =============================================================================
+
+# =============================================================================
+# Post-process: HTML-clean titles (Europe PMC sometimes returns <i>...</i>)
+# =============================================================================
+
+def test_clean_text_strips_italics_tags():
+    raw = "<i>Lactobacillus rhamnosus</i> GG attenuates MASH"
+    assert _clean_text(raw) == "Lactobacillus rhamnosus GG attenuates MASH"
+
+
+def test_clean_text_decodes_entities_then_strips():
+    raw = "&lt;i&gt;Lactobacillus rhamnosus&lt;/i&gt; GG attenuates MASH"
+    assert _clean_text(raw) == "Lactobacillus rhamnosus GG attenuates MASH"
+
+
+def test_clean_text_handles_empty_and_none():
+    assert _clean_text(None) is None
+    assert _clean_text("") == ""
+
+
+# =============================================================================
+# Post-process: cap summary at 4 sentences
+# =============================================================================
+
+def test_truncate_to_n_sentences_keeps_first_four():
+    s = "First sentence. Second one. Third one. Fourth one. Fifth one. Sixth one."
+    result = _truncate_to_n_sentences(s, n=4)
+    assert "Fifth" not in result
+    assert "Sixth" not in result
+    assert result.endswith("Fourth one.")
+
+
+def test_truncate_to_n_sentences_passes_through_short_text():
+    """If the LLM already obeyed the cap, output is unchanged."""
+    s = "Only three sentences here. Like this. Done."
+    assert _truncate_to_n_sentences(s, n=4) == s
+
 
 def test_validate_authors_drops_haub_hallucination():
     """Reproduces the exact bug from a real run: LLM returned authors
