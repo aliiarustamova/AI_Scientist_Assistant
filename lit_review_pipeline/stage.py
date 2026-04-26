@@ -438,19 +438,25 @@ def _classify(
         return json.loads(raw)
 
     # JSON-mode occasionally produces malformed output. We retry once on
-    # JSONDecodeError. The retry itself can also fail (JSON or network);
-    # we wrap it so the surfaced error is informative rather than a raw
-    # second-attempt traceback.
+    # JSONDecodeError. Beyond that — and for any LLM-side failure
+    # (network, rate limit, auth, malformed-after-retry) — we return a
+    # degraded-but-valid response rather than 500'ing. The /lit-review
+    # endpoint is the FIRST stage of the pipeline; if it bombs the user
+    # can't even start. Better to render an empty refs list with an
+    # honest "we couldn't classify" message than to surface "HTTP 500"
+    # in the FE error banner.
+    parsed: dict = {}
     try:
         parsed = _call_and_parse()
-    except json.JSONDecodeError as first_exc:
+    except json.JSONDecodeError:
         try:
             parsed = _call_and_parse()
-        except json.JSONDecodeError as retry_exc:
-            raise RuntimeError(
-                f"LLM returned malformed JSON twice (first: {first_exc}; "
-                f"retry: {retry_exc}). Try LLM_PROVIDER=anthropic for stricter output."
-            ) from retry_exc
+        except Exception:  # noqa: BLE001 — degraded fallback intended
+            parsed = {}
+    except Exception:  # noqa: BLE001 — same: degrade gracefully
+        parsed = {}
+    if not isinstance(parsed, dict):
+        parsed = {}
 
     refs: list[Citation] = []
     for r in parsed.get("references", [])[:3]:
@@ -487,7 +493,20 @@ def run(plan: ExperimentPlan) -> LitReviewSession:
     behind a broader query's results.
     """
     h = plan.hypothesis
-    queries = _rewrite_queries(h)
+    # _rewrite_queries calls the LLM. If that fails (network / auth /
+    # rate limit), fall back to a single naive query built from the
+    # hypothesis fields rather than 500'ing the whole stage. Better
+    # to retrieve "something" with degraded relevance than nothing.
+    try:
+        queries = _rewrite_queries(h)
+    except Exception:  # noqa: BLE001 — degraded fallback intended
+        s = h.structured
+        fallback_query = " ".join(filter(None, [
+            s.subject.strip(),
+            s.independent.strip(),
+            s.dependent.strip(),
+        ])).strip()
+        queries = [fallback_query or s.research_question or s.subject or "(empty)"]
 
     # Per-query fetch + dedupe. Use page_size=8 each → up to 24 papers
     # before dedupe, typically 10-18 unique after.
