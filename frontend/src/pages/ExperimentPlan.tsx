@@ -305,6 +305,46 @@ const STAGES = [
   "Estimating cost and timeline…",
 ] as const;
 
+// Parse an ISO 8601 duration to total seconds. Returns null on shapes
+// we don't handle. Used for the running-clock cumulative sum.
+function parseIso8601ToSeconds(iso: string | null | undefined): number | null {
+  if (!iso) return null;
+  const s = iso.trim();
+  // Weeks-only — P2W
+  const wOnly = /^P(\d+)W$/.exec(s);
+  if (wOnly) return parseInt(wOnly[1], 10) * 7 * 86400;
+  // Combined P{D}T{H}{M}{S}, with all parts optional
+  const m = /^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?)?$/.exec(s);
+  if (!m) return null;
+  const [, d, h, mn, sc] = m;
+  let total = 0;
+  if (d) total += parseInt(d, 10) * 86400;
+  if (h) total += parseInt(h, 10) * 3600;
+  if (mn) total += parseInt(mn, 10) * 60;
+  if (sc) total += parseFloat(sc);
+  // "P" with no parts is malformed → null
+  return d || h || mn || sc ? total : null;
+}
+
+// Format a cumulative elapsed seconds as a compact "t = ..." label for
+// the running clock. Examples: 0 → "0", 300 → "5m", 5400 → "1h 30m",
+// 93600 → "1d 2h". We round seconds down to whole minutes for anything
+// over a minute — sub-minute precision is noise on a multi-day plan.
+function formatElapsed(seconds: number): string {
+  if (seconds <= 0) return "0";
+  if (seconds < 60) return `${Math.round(seconds)}s`;
+  const totalMin = Math.floor(seconds / 60);
+  if (totalMin < 60) return `${totalMin}m`;
+  const totalHours = Math.floor(totalMin / 60);
+  const remMin = totalMin % 60;
+  if (totalHours < 24) {
+    return remMin > 0 ? `${totalHours}h ${remMin}m` : `${totalHours}h`;
+  }
+  const days = Math.floor(totalHours / 24);
+  const remHours = totalHours % 24;
+  return remHours > 0 ? `${days}d ${remHours}h` : `${days}d`;
+}
+
 // Humanize an ISO 8601 duration ("PT5M", "P1DT2H") for display chips.
 // BE-side `_humanize_duration` does the same on per-step `meta`; this is
 // for total_duration values that come back as raw ISO. Falls back to the
@@ -488,8 +528,19 @@ function computePlanConfidence(
 // troubleshooting, recipes, critical/pause markers), and trailing
 // collapsibles for deviations + success criteria.
 
-function ProcedureBlock({ proc }: { proc: FEProcedureGroup }) {
+function ProcedureBlock({
+  proc,
+  stepClock,
+  procedureClock,
+  showClock,
+}: {
+  proc: FEProcedureGroup;
+  stepClock: Map<string, number>;
+  procedureClock: Map<number, number>;
+  showClock: boolean;
+}) {
   const dur = humanizeDuration(proc.total_duration);
+  const procStartSec = procedureClock.get(proc.procedure_index);
   return (
     <section
       id={`proc-${proc.procedure_index}`}
@@ -507,6 +558,14 @@ function ProcedureBlock({ proc }: { proc: FEProcedureGroup }) {
         >
           {proc.name}
         </h3>
+        {/* Procedure-level start time (running clock) — sits next to the
+            duration chip when both are present. Helps researchers see
+            when a procedure begins relative to the start of the plan. */}
+        {showClock && procStartSec !== undefined && (
+          <span className="inline-flex items-center gap-1.5 rounded-sm border border-rule bg-paper px-2.5 py-1 font-mono-notebook text-[11px] uppercase tracking-[0.18em] text-ink-soft">
+            starts at t&nbsp;=&nbsp;{formatElapsed(procStartSec)}
+          </span>
+        )}
         {dur && (
           <span className="ml-auto inline-flex items-center gap-1.5 rounded-sm border border-rule bg-paper-raised px-2.5 py-1 font-mono-notebook text-[11px] uppercase tracking-[0.18em] text-ink-soft">
             <Timer aria-hidden className="h-3 w-3" strokeWidth={1.75} />
@@ -529,6 +588,11 @@ function ProcedureBlock({ proc }: { proc: FEProcedureGroup }) {
             step={step}
             procedureIndex={proc.procedure_index}
             stepIndex={step.step_number_in_procedure || idx + 1}
+            elapsedSec={
+              showClock && step.step_id
+                ? stepClock.get(step.step_id) ?? null
+                : null
+            }
           />
         ))}
       </ol>
@@ -609,10 +673,15 @@ function ProcedureStepRow({
   step,
   procedureIndex,
   stepIndex,
+  elapsedSec,
 }: {
   step: FEProtocolStep;
   procedureIndex: number;
   stepIndex: number;
+  /** Cumulative time from t=0 at which this step begins. null when no
+   *  step in the plan has duration data — the running clock would be
+   *  meaningless and we suppress it entirely. */
+  elapsedSec: number | null;
 }) {
   const dur = humanizeDuration(step.duration);
   return (
@@ -620,11 +689,21 @@ function ProcedureStepRow({
       id={step.step_id}
       className="grid grid-cols-[auto_1fr] gap-5 step-block"
     >
-      {/* Numbering: "2.1" — uses procedure_index + step_number_in_procedure */}
-      <div className="flex flex-col items-center">
+      {/* Left gutter: step numbering ("2.1") + running-clock chip below it
+          when the plan has duration data. The clock shows time AT THE
+          START of the step (t=0 for step 1, then accumulates). */}
+      <div className="flex flex-col items-center gap-1.5">
         <span className="font-mono-notebook text-[12px] uppercase tracking-[0.22em] text-muted-foreground">
           {procedureIndex}.{stepIndex}
         </span>
+        {elapsedSec !== null && (
+          <span
+            className="font-mono-notebook text-[10px] tracking-[0.1em] text-primary"
+            title="Cumulative time from start of plan"
+          >
+            t={formatElapsed(elapsedSec)}
+          </span>
+        )}
       </div>
 
       <div className="space-y-3">
@@ -925,6 +1004,30 @@ const ExperimentPlan = () => {
     [apiProtocolView, apiMaterialsView],
   );
 
+  // Running clock — cumulative time at the START of each step + procedure.
+  // Walks all procedures in order; missing durations advance the clock by
+  // 0 (the previous step's running time stays). The clock is only useful
+  // when at least some steps have durations, so we suppress the chip
+  // entirely for plans where nothing has duration data.
+  const { stepClock, procedureClock, anyDurations } = useMemo(() => {
+    const stepClock = new Map<string, number>();
+    const procedureClock = new Map<number, number>();
+    let cumSec = 0;
+    let anyDurations = false;
+    for (const proc of procedures) {
+      procedureClock.set(proc.procedure_index, cumSec);
+      for (const step of proc.steps) {
+        if (step.step_id) stepClock.set(step.step_id, cumSec);
+        const stepSec = parseIso8601ToSeconds(step.duration ?? null);
+        if (stepSec !== null && stepSec > 0) {
+          anyDurations = true;
+          cumSec += stepSec;
+        }
+      }
+    }
+    return { stepClock, procedureClock, anyDurations };
+  }, [procedures]);
+
   const generating = reveal < 4;
 
   return (
@@ -1018,12 +1121,53 @@ const ExperimentPlan = () => {
             <span className="italic text-primary">run this</span>?
           </h1>
 
-          {/* Confidence banner — derived from real BE data when present;
-              falls back to the original mock state when there's no API
-              data (mock-only design demo). The fallback keeps the
-              page readable when navigated to directly. */}
+          {/* Confidence banner — derived from real BE data when present.
+              Three branches:
+              - Mock-only mode (no plan_id and no structured): show the
+                static "Moderate–High" mock so the design demo still
+                looks complete when navigated to directly.
+              - Live path, API still loading: show a "Computing…"
+                placeholder. The previous behavior of dropping back to
+                the static mock during loading made it look like the
+                banner was lying about a real run, so explicit
+                placeholder copy is preferable.
+              - Live path, planConfidence resolved: show the real
+                computed values. */}
           {(() => {
-            // Mock-fallback values mirror the original hardcoded banner.
+            // Live path but waiting on API — render a loading placeholder
+            // that's clearly distinct from real data.
+            if (!useMockData && !planConfidence) {
+              return (
+                <div
+                  role="note"
+                  aria-label="Plan confidence (computing)"
+                  className="mt-7 flex flex-col gap-4 rounded-md border border-rule bg-paper-raised px-6 py-5 sm:flex-row sm:items-center sm:justify-between sm:px-7"
+                >
+                  <div className="flex items-center gap-5">
+                    <div className="flex flex-col items-start gap-1.5">
+                      <p className="font-mono-notebook text-[11px] uppercase tracking-[0.22em] text-muted-foreground">
+                        Plan confidence
+                      </p>
+                      <span
+                        className="text-[26px] italic leading-none text-ink-soft"
+                        style={{ fontFamily: '"Instrument Serif", Georgia, serif' }}
+                      >
+                        Computing…
+                      </span>
+                    </div>
+                    <span aria-hidden className="hidden h-10 w-px bg-rule sm:block" />
+                    <p
+                      className="hidden max-w-md text-[15px] italic leading-snug text-muted-foreground sm:block"
+                      style={{ fontFamily: '"Instrument Serif", Georgia, serif' }}
+                    >
+                      Waiting for the protocol and materials pipeline to complete before scoring confidence.
+                    </p>
+                  </div>
+                </div>
+              );
+            }
+
+            // Mock-only fallback — design-demo state.
             const banner = planConfidence ?? {
               label: "Moderate–High",
               dotsFilled: 4,
@@ -1348,7 +1492,13 @@ const ExperimentPlan = () => {
               {protocolView === "text" && hasRichProtocol && (
                 <div className="divide-y divide-rule">
                   {procedures.map((proc) => (
-                    <ProcedureBlock key={proc.procedure_index} proc={proc} />
+                    <ProcedureBlock
+                      key={proc.procedure_index}
+                      proc={proc}
+                      stepClock={stepClock}
+                      procedureClock={procedureClock}
+                      showClock={anyDurations}
+                    />
                   ))}
                 </div>
               )}
