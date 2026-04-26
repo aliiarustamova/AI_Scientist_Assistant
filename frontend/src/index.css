@@ -10,17 +10,17 @@
 
 @layer base {
   :root {
-    /* Paper & ink core — slightly darker page, brighter raised cards */
-    --background: 38 22% 90%;          /* #ebe6dc toned cream */
-    --foreground: 0 0% 7%;             /* #111 ink */
+    /* Paper & ink core */
+    --background: 38 22% 90%;
+    --foreground: 0 0% 7%;
 
-    --card: 42 38% 98%;                /* near-white cream — cards pop */
+    --card: 42 38% 98%;
     --card-foreground: 0 0% 5%;
 
     --popover: 42 38% 98%;
     --popover-foreground: 0 0% 5%;
 
-    --primary: 222 45% 22%;            /* deep ink blue */
+    --primary: 222 45% 22%;
     --primary-foreground: 42 38% 98%;
 
     --secondary: 38 22% 86%;
@@ -49,13 +49,11 @@
     --rule: 34 16% 80%;
     --rule-soft: 36 18% 86%;
 
-    /* Sage accent — for "Now"/positive comparisons */
     --sage: 142 28% 42%;
     --sage-soft: 142 35% 78%;
     --sage-wash: 142 30% 92%;
 
-    /* Ruled-paper rhythm — change in one place to keep glyphs on the rule.
-       Used by .ruled-paper for both line-height and gradient spacing. */
+    /* Ruled-paper rhythm — single source of truth so glyphs stay on the line */
     --rule-step: 1.85rem;
 
     --sidebar-background: 0 0% 98%;
@@ -68,9 +66,8 @@
     --sidebar-ring: 217.2 91.2% 59.8%;
   }
 
-  /* Note: no .dark block. The lab-notebook aesthetic is paper-and-ink and
-     the shadcn defaults fight that. If a dark variant is needed later,
-     design it deliberately (e.g. midnight paper + cream ink). */
+  /* No .dark block — paper-and-ink doesn't translate to the shadcn defaults.
+     If a dark variant is needed later, design it deliberately. */
 }
 
 @layer base {
@@ -79,7 +76,6 @@
   }
 
   html {
-    /* Root size lifted from 16px → 17px — every rem-based size scales. */
     font-size: 17px;
     font-family: "Inter", system-ui, sans-serif;
     -webkit-font-smoothing: antialiased;
@@ -110,33 +106,10 @@
     background: hsl(var(--primary) / 0.15);
     color: hsl(var(--ink));
   }
-}
 
-/* ============================================================
-   Readability floor — minimum sizes for body/secondary text.
-   Lives in @layer utilities so it shares Tailwind's cascade
-   layer; source order wins, no !important needed. Components
-   that genuinely need smaller text can use arbitrary values
-   not covered here, or override locally.
-   ============================================================ */
-@layer utilities {
-  .text-xs   { font-size: 14px;   line-height: 1.5; }
-  .text-sm   { font-size: 15px;   line-height: 1.55; }
-  .text-base { font-size: 16.5px; line-height: 1.6; }
-  .text-lg   { font-size: 18px;   line-height: 1.55; }
-
-  /* Floor only the very small arbitrary sizes; larger ones pass through. */
-  .text-\[10px\],
-  .text-\[11px\],
-  .text-\[12px\],
-  .text-\[13px\] { font-size: 14px;   line-height: 1.5; }
-  .text-\[14px\] { font-size: 14.5px; line-height: 1.55; }
-  .text-\[15px\] { font-size: 15.5px; line-height: 1.55; }
-  .text-\[16px\] { font-size: 16.5px; line-height: 1.6; }
-  .text-\[17px\] { font-size: 17.5px; line-height: 1.6; }
-  .text-\[18px\] { font-size: 18.5px; line-height: 1.55; }
-
-  /* Secondary text contrast lift */
+  /* Secondary-text contrast is a color tweak, not a size override —
+     keep it here, no !important needed since this is the only rule
+     setting color on .text-muted-foreground. */
   .text-muted-foreground {
     color: hsl(var(--ink-soft) / 0.78);
   }
@@ -158,9 +131,7 @@
             mask-image: linear-gradient(to bottom, hsl(0 0% 0%) 0%, hsl(0 0% 0% / 0.6) 70%, hsl(0 0% 0% / 0.2) 100%);
   }
 
-  /* Ruled paper — line-height and rule spacing share --rule-step
-     so glyphs can't drift off the baseline. Override --rule-step
-     on a parent element to change rhythm. */
+  /* Ruled paper — line-height and rule spacing share --rule-step */
   .ruled-paper {
     background-image: repeating-linear-gradient(
       to bottom,
@@ -174,7 +145,6 @@
     line-height: var(--rule-step);
   }
 
-  /* Heading utilities */
   .font-serif-display {
     font-family: "Instrument Serif", "Iowan Old Style", Georgia, serif;
     font-feature-settings: "liga", "dlig";
@@ -213,11 +183,9 @@
     font-feature-settings: "ss02", "ss19";
   }
 
-  /* Chip — opt-in styling for tags/pills/badges. Apply explicitly
-     instead of having every rounded+small-text element inherit chip
-     padding. Combine with color/border utilities as needed. */
+  /* Opt-in chip styling */
   .chip {
-    font-size: 13.5px;
+    font-size: 0.875rem; /* matches text-sm post-config */
     line-height: 1.45;
     padding: 0.25rem 0.6rem;
     display: inline-flex;
