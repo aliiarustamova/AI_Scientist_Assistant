@@ -301,9 +301,12 @@ const VALIDATION = {
   ],
 };
 
+// FEASIBILITY mock — `body` removed. The intro paragraph was a hard-
+// coded glucose-experiment narrative ("low-risk, single-investigator
+// ... OD600 kinetics ... E. coli in M9") that displayed regardless of
+// the user's actual hypothesis, which was misleading. The Feasibility
+// section now opens straight into the Assumptions + Risks columns.
 const FEASIBILITY = {
-  body:
-    "This is a low-risk, single-investigator experiment that fits comfortably in a four-week window with standard plate-reader time. The reagents are inexpensive and shelf-stable, and the readout (OD600 kinetics) is robust and well-characterized for E. coli in M9.",
   assumptions: [
     "Standard lab equipment available (plate reader, shaking incubator, 4 °C / −80 °C storage).",
     "OD600 measurements are calibrated and within the reader's linear range (≤ 0.8).",
@@ -2599,14 +2602,10 @@ const ExperimentPlan = () => {
               </span>
             </summary>
             <div className="border-t border-rule px-7 py-6 sm:px-9 sm:py-8">
-              <p
-                className="max-w-3xl text-[18px] italic leading-[1.65] text-ink-soft"
-                style={{ fontFamily: '"Instrument Serif", Georgia, serif' }}
-              >
-                {FEASIBILITY.body}
-              </p>
-
-              <div className="mt-6 grid grid-cols-1 gap-6 border-t border-rule pt-5 sm:grid-cols-2 sm:gap-8">
+              {/* Removed: hardcoded glucose-experiment intro paragraph
+                  that displayed regardless of the user's hypothesis.
+                  Section now opens straight into Assumptions + Risks. */}
+              <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 sm:gap-8">
                 {/* Assumptions */}
                 <div className="relative sm:pr-6">
                   <span aria-hidden className="absolute -left-3 top-1 h-3 w-[2px] rounded-sm bg-sage" />
